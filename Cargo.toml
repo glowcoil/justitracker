@@ -1,0 +1,9 @@
+[package]
+name = "justitracker"
+version = "0.1.0"
+authors = ["Micah Johnston <micah@glowcoil.com>"]
+
+[dependencies]
+glium = "*"
+cpal = "*"
+crossbeam-channel = "*"
