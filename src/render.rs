@@ -1,32 +1,61 @@
-use glium;
-use arrayvec;
-
 use std::borrow::Cow;
 
-use rusttype::{FontCollection, Font, Scale, point, vector, PositionedGlyph, Rect};
+use arrayvec;
+
+use rusttype;
+use rusttype::{FontCollection, Font, Scale, point, vector, PositionedGlyph};
 use rusttype::gpu_cache::Cache;
 
+use glium;
 use glium::Surface;
 
-pub struct TextRenderer<'a> {
+pub struct DisplayList {
+    pub rects: Vec<Rect>,
+    pub texts: Vec<Text>,
+}
+
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub color: [f32; 4],
+}
+
+pub struct Text {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+pub struct Renderer<'a> {
+    display: glium::Display,
+    width: u32,
+    height: u32,
+    dpi_factor: f32,
+
+    rect_program: glium::Program,
+
     font: Font<'a>,
     cache: Cache,
     cache_tex: glium::texture::Texture2d,
-    program: glium::Program,
-    dpi_factor: f32,
-    display: &'a glium::Display,
+    text_program: glium::Program,
 }
 
-impl<'a> TextRenderer<'a> {
-    pub fn new(display: &'a glium::Display, font_data: &'static [u8], width: u32, dpi_factor: f32) -> TextRenderer<'a> {
-        let collection = FontCollection::from_bytes(font_data as &[u8]);
+impl<'a> Renderer<'a> {
+    pub fn new(display: glium::Display, width: u32, height: u32, dpi_factor: f32) -> Renderer<'a> {
+        /* initialize rect rendering */
+        let rect_program = glium::Program::from_source(&display, include_str!("shader/rect_vert.glsl"), include_str!("shader/rect_frag.glsl"), None).unwrap();
+
+        /* initialize text rendering */
+        let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
         let font = collection.into_font().unwrap();
 
         let (cache_width, cache_height) = (512 * dpi_factor as u32, 512 * dpi_factor as u32);
-        let mut cache = Cache::new(cache_width, cache_height, 0.1, 0.1);
+        let cache = Cache::new(cache_width, cache_height, 0.1, 0.1);
 
         let cache_tex = glium::texture::Texture2d::with_format(
-            display,
+            &display,
             glium::texture::RawImage2d {
                 data: Cow::Owned(vec![128u8; cache_width as usize * cache_height as usize]),
                 width: cache_width,
@@ -36,51 +65,72 @@ impl<'a> TextRenderer<'a> {
             glium::texture::UncompressedFloatFormat::U8,
             glium::texture::MipmapsOption::NoMipmap).unwrap();
 
-        let program = program!(
-            display,
+        let text_program = program!(
+            &display,
             140 => {
-                vertex: "
-                    #version 140
-
-                    in vec2 position;
-                    in vec2 tex_coords;
-                    in vec4 colour;
-
-                    out vec2 v_tex_coords;
-                    out vec4 v_colour;
-
-                    void main() {
-                        gl_Position = vec4(position, 0.0, 1.0);
-                        v_tex_coords = tex_coords;
-                        v_colour = colour;
-                    }
-                ",
-
-                fragment: "
-                    #version 140
-                    uniform sampler2D tex;
-                    in vec2 v_tex_coords;
-                    in vec4 v_colour;
-                    out vec4 f_colour;
-
-                    void main() {
-                        f_colour = v_colour * texture(tex, v_tex_coords).rrrr;
-                    }
-                "
+                vertex: include_str!("shader/text_vert.glsl"),
+                fragment: include_str!("shader/text_frag.glsl"),
             }).unwrap();
 
-        TextRenderer {
+        Renderer {
+            display: display,
+            width: width,
+            height: height,
+            dpi_factor: dpi_factor,
+
+            rect_program: rect_program,
+
             font: font,
             cache: cache,
             cache_tex: cache_tex,
-            program: program,
-            dpi_factor: dpi_factor,
-            display: display,
+            text_program: text_program,
         }
     }
 
-    pub fn draw(&mut self, target: &mut glium::Frame, width: u32, text: &str) {
-        let glyphs = layout_paragraph(&self.font, Scale::uniform(14.0 * self.dpi_factor), width, &text);
+    pub fn render(&mut self, display_list: DisplayList) {
+        let mut target = self.display.draw();
+        target.clear_color(0.0, 0.03, 0.1, 1.0);
+
+        self.render_rects(&mut target, display_list.rects);
+        self.render_texts(&mut target, display_list.texts);
+
+        target.finish().unwrap();
+    }
+
+    fn render_rects(&self, target: &mut glium::Frame, rects: Vec<Rect>) {
+        #[derive(Copy, Clone)]
+        struct Vertex {
+            position: [f32; 2],
+            color: [f32; 4],
+        }
+        implement_vertex!(Vertex, position, color);
+
+        let vertices: Vec<Vertex> = rects.iter().flat_map(|r| {
+            arrayvec::ArrayVec::<[Vertex; 6]>::from([
+                Vertex { position: [r.x, r.y], color: r.color },
+                Vertex { position: [r.x + r.w, r.y], color: r.color },
+                Vertex { position: [r.x + r.w, r.y + r.h], color: r.color },
+                Vertex { position: [r.x + r.w, r.y + r.h], color: r.color },
+                Vertex { position: [r.x, r.y + r.h], color: r.color },
+                Vertex { position: [r.x, r.y], color: r.color },
+            ])
+        }).collect();
+
+        let vertex_buffer = glium::VertexBuffer::new(&self.display, &vertices).unwrap();
+
+        target.draw(
+            &vertex_buffer,
+            glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList),
+            &self.rect_program,
+            &glium::uniforms::EmptyUniforms,
+            &Default::default()).unwrap();
+    }
+
+    fn render_texts(&mut self, target: &mut glium::Frame, texts: Vec<Text>) {
+        let font = &self.font;
+        let glyphs: Vec<PositionedGlyph> = texts.iter().flat_map(|t| {
+            layout_paragraph(font, Scale::uniform(14.0 * self.dpi_factor), t.x, t.y, self.width, &t.text)
+        }).collect();
         for glyph in &glyphs {
             self.cache.queue_glyph(0, glyph.clone());
         }
@@ -122,12 +172,12 @@ impl<'a> TextRenderer<'a> {
             let origin = point(0.0, 0.0);
             let vertices: Vec<Vertex> = glyphs.iter().flat_map(|g| {
                 if let Ok(Some((uv_rect, screen_rect))) = self.cache.rect_for(0, g) {
-                    let gl_rect = Rect {
-                        min: origin
-                            + (vector(screen_rect.min.x as f32 / screen_width - 0.5,
+                    let gl_rect = rusttype::Rect {
+                        min: origin +
+                            (vector(screen_rect.min.x as f32 / screen_width - 0.5,
                                       1.0 - screen_rect.min.y as f32 / screen_height - 0.5)) * 2.0,
-                        max: origin
-                            + (vector(screen_rect.max.x as f32 / screen_width - 0.5,
+                        max: origin +
+                            (vector(screen_rect.max.x as f32 / screen_width - 0.5,
                                       1.0 - screen_rect.max.y as f32 / screen_height - 0.5)) * 2.0
                     };
                     arrayvec::ArrayVec::<[Vertex; 6]>::from([
@@ -166,13 +216,13 @@ impl<'a> TextRenderer<'a> {
             }).collect();
 
             glium::VertexBuffer::new(
-                self.display,
+                &self.display,
                 &vertices).unwrap()
         };
 
         target.draw(&vertex_buffer,
             glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList),
-            &self.program, &uniforms,
+            &self.text_program, &uniforms,
             &glium::DrawParameters {
                 blend: glium::Blend::alpha_blending(),
                 ..Default::default()
@@ -182,19 +232,21 @@ impl<'a> TextRenderer<'a> {
 
 fn layout_paragraph<'a>(font: &'a Font,
                         scale: Scale,
+                        x: f32,
+                        y: f32,
                         width: u32,
                         text: &str) -> Vec<PositionedGlyph<'a>> {
     use unicode_normalization::UnicodeNormalization;
     let mut result = Vec::new();
     let v_metrics = font.v_metrics(scale);
     let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
-    let mut caret = point(0.0, v_metrics.ascent);
+    let mut caret = point(x, y + v_metrics.ascent);
     let mut last_glyph_id = None;
     for c in text.nfc() {
         if c.is_control() {
             match c {
                 '\r' => {
-                    caret = point(0.0, caret.y + advance_height);
+                    caret = point(x, caret.y + advance_height);
                 }
                 '\n' => {},
                 _ => {}
@@ -213,7 +265,7 @@ fn layout_paragraph<'a>(font: &'a Font,
         let mut glyph = base_glyph.scaled(scale).positioned(caret);
         if let Some(bb) = glyph.pixel_bounding_box() {
             if bb.max.x > width as i32 {
-                caret = point(0.0, caret.y + advance_height);
+                caret = point(x, caret.y + advance_height);
                 glyph = glyph.into_unpositioned().positioned(caret);
                 last_glyph_id = None;
             }
