@@ -106,13 +106,16 @@ impl<'a> Renderer<'a> {
         implement_vertex!(Vertex, position, color);
 
         let vertices: Vec<Vertex> = rects.iter().flat_map(|r| {
+            let (x1, y1) = self.pixel_to_ndc(r.x, r.y);
+            let (x2, y2) = self.pixel_to_ndc(r.x + r.w, r.y + r.h);
+
             arrayvec::ArrayVec::<[Vertex; 6]>::from([
-                Vertex { position: [r.x, r.y], color: r.color },
-                Vertex { position: [r.x + r.w, r.y], color: r.color },
-                Vertex { position: [r.x + r.w, r.y + r.h], color: r.color },
-                Vertex { position: [r.x + r.w, r.y + r.h], color: r.color },
-                Vertex { position: [r.x, r.y + r.h], color: r.color },
-                Vertex { position: [r.x, r.y], color: r.color },
+                Vertex { position: [x1, y1], color: r.color },
+                Vertex { position: [x2, y1], color: r.color },
+                Vertex { position: [x2, y2], color: r.color },
+                Vertex { position: [x2, y2], color: r.color },
+                Vertex { position: [x1, y2], color: r.color },
+                Vertex { position: [x1, y1], color: r.color },
             ])
         }).collect();
 
@@ -227,6 +230,10 @@ impl<'a> Renderer<'a> {
                 blend: glium::Blend::alpha_blending(),
                 ..Default::default()
             }).unwrap();
+    }
+
+    fn pixel_to_ndc(&self, x: f32, y: f32) -> (f32, f32) {
+        (2.0 * (x / self.width as f32 - 0.5), 2.0 * (1.0 - y / self.height as f32 - 0.5))
     }
 }
 
