@@ -1,16 +1,19 @@
 mod ui;
 mod render;
+mod audio;
 
 #[macro_use]
 extern crate glium;
 extern crate rusttype;
 extern crate arrayvec;
 extern crate unicode_normalization;
+extern crate cpal;
 
 use glium::glutin;
 
 use render::*;
 use ui::*;
+use audio::*;
 
 fn main() {
     let mut events_loop = glutin::EventsLoop::new();
@@ -32,6 +35,8 @@ fn main() {
     let button = ui.button("button");
     ui.make_root(button);
 
+    let audio_send = start_audio_thread();
+
     events_loop.run_forever(|ev| {
         match ev {
             glutin::Event::WindowEvent { ref event, .. } => match *event {
@@ -46,9 +51,9 @@ fn main() {
         while let Some(ui_event) = ui.get_event() {
             match ui_event {
                 UIEvent::ButtonPress(id) => {
+                    audio_send.send(1);
                     println!("{}", id);
                 }
-                _ => {}
             }
         }
 

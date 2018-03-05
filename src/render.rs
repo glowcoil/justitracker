@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use arrayvec;
 
 use rusttype;
-use rusttype::{FontCollection, Font, Scale, point, vector, PositionedGlyph};
+use rusttype::{point, vector, PositionedGlyph};
 use rusttype::gpu_cache::Cache;
 
 use glium;

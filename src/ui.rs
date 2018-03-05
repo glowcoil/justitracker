@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use glium::glutin;
-use rusttype::{FontCollection, Font, Scale, point, vector, PositionedGlyph};
+use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
@@ -23,13 +23,13 @@ enum Widget {
     Empty,
     // HList(Vec<WidgetID>),
     // VList(Vec<WidgetID>),
-    // ScrollBox { w: f32, h: f32, contents: WidgetID },
+    // ScrollBox { contents: WidgetID },
     Button {
         text: &'static str,
     },
 }
 
-const padding: f32 = 4.0;
+const PADDING: f32 = 4.0;
 
 pub enum UIEvent {
     ButtonPress(WidgetID),
@@ -75,7 +75,7 @@ impl<'a> UI<'a> {
                     self.mouse_x = x as f32;
                     self.mouse_y = y as f32;
                 },
-                glutin::WindowEvent::MouseInput { device_id, state: mouse_state, button } => {
+                glutin::WindowEvent::MouseInput { device_id, state: mouse_state, button, modifiers } => {
                     match mouse_state {
                         glutin::ElementState::Pressed => {
                             if let Some((widget_x, widget_y, id)) = self.get_widget_at(self.mouse_x, self.mouse_y) {
@@ -134,9 +134,9 @@ impl<'a> UI<'a> {
 
                 let font = &self.font;
                 let (width, height) = get_label_size(font, self.scale, text);
-                let mut glyphs = layout_label(font, self.scale, offset_x + padding, offset_y + padding, text);
+                let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, text);
 
-                list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * padding, h: height + 2.0 * padding, color: color });
+                list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
             _ => {}
@@ -169,7 +169,7 @@ impl<'a> UI<'a> {
         match self.widgets[id] {
             Widget::Button { text } => {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
-                (Some(width + 2.0 * padding), Some(height + 2.0 * padding))
+                (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
             _ => (None, None)
         }
