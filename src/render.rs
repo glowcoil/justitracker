@@ -9,9 +9,9 @@ use rusttype::gpu_cache::Cache;
 use glium;
 use glium::Surface;
 
-pub struct DisplayList {
+pub struct DisplayList<'a> {
     pub rects: Vec<Rect>,
-    pub texts: Vec<Text>,
+    pub glyphs: Vec<PositionedGlyph<'a>>,
 }
 
 pub struct Rect {
@@ -22,13 +22,7 @@ pub struct Rect {
     pub color: [f32; 4],
 }
 
-pub struct Text {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-}
-
-pub struct Renderer<'a> {
+pub struct Renderer {
     display: glium::Display,
     width: u32,
     height: u32,
@@ -36,21 +30,17 @@ pub struct Renderer<'a> {
 
     rect_program: glium::Program,
 
-    font: Font<'a>,
     cache: Cache,
     cache_tex: glium::texture::Texture2d,
     text_program: glium::Program,
 }
 
-impl<'a> Renderer<'a> {
-    pub fn new(display: glium::Display, width: u32, height: u32, dpi_factor: f32) -> Renderer<'a> {
+impl Renderer {
+    pub fn new(display: glium::Display, width: u32, height: u32, dpi_factor: f32) -> Renderer {
         /* initialize rect rendering */
         let rect_program = glium::Program::from_source(&display, include_str!("shader/rect_vert.glsl"), include_str!("shader/rect_frag.glsl"), None).unwrap();
 
         /* initialize text rendering */
-        let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
-        let font = collection.into_font().unwrap();
-
         let (cache_width, cache_height) = (512 * dpi_factor as u32, 512 * dpi_factor as u32);
         let cache = Cache::new(cache_width, cache_height, 0.1, 0.1);
 
@@ -80,7 +70,6 @@ impl<'a> Renderer<'a> {
 
             rect_program: rect_program,
 
-            font: font,
             cache: cache,
             cache_tex: cache_tex,
             text_program: text_program,
@@ -92,7 +81,7 @@ impl<'a> Renderer<'a> {
         target.clear_color(0.0, 0.03, 0.1, 1.0);
 
         self.render_rects(&mut target, display_list.rects);
-        self.render_texts(&mut target, display_list.texts);
+        self.render_glyphs(&mut target, display_list.glyphs);
 
         target.finish().unwrap();
     }
@@ -129,11 +118,7 @@ impl<'a> Renderer<'a> {
             &Default::default()).unwrap();
     }
 
-    fn render_texts(&mut self, target: &mut glium::Frame, texts: Vec<Text>) {
-        let font = &self.font;
-        let glyphs: Vec<PositionedGlyph> = texts.iter().flat_map(|t| {
-            layout_paragraph(font, Scale::uniform(14.0 * self.dpi_factor), t.x, t.y, self.width, &t.text)
-        }).collect();
+    fn render_glyphs<'a>(&mut self, target: &mut glium::Frame, glyphs: Vec<PositionedGlyph<'a>>) {
         for glyph in &glyphs {
             self.cache.queue_glyph(0, glyph.clone());
         }
@@ -235,50 +220,4 @@ impl<'a> Renderer<'a> {
     fn pixel_to_ndc(&self, x: f32, y: f32) -> (f32, f32) {
         (2.0 * (x / self.width as f32 - 0.5), 2.0 * (1.0 - y / self.height as f32 - 0.5))
     }
-}
-
-fn layout_paragraph<'a>(font: &'a Font,
-                        scale: Scale,
-                        x: f32,
-                        y: f32,
-                        width: u32,
-                        text: &str) -> Vec<PositionedGlyph<'a>> {
-    use unicode_normalization::UnicodeNormalization;
-    let mut result = Vec::new();
-    let v_metrics = font.v_metrics(scale);
-    let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
-    let mut caret = point(x, y + v_metrics.ascent);
-    let mut last_glyph_id = None;
-    for c in text.nfc() {
-        if c.is_control() {
-            match c {
-                '\r' => {
-                    caret = point(x, caret.y + advance_height);
-                }
-                '\n' => {},
-                _ => {}
-            }
-            continue;
-        }
-        let base_glyph = if let Some(glyph) = font.glyph(c) {
-            glyph
-        } else {
-            continue;
-        };
-        if let Some(id) = last_glyph_id.take() {
-            caret.x += font.pair_kerning(scale, id, base_glyph.id());
-        }
-        last_glyph_id = Some(base_glyph.id());
-        let mut glyph = base_glyph.scaled(scale).positioned(caret);
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            if bb.max.x > width as i32 {
-                caret = point(x, caret.y + advance_height);
-                glyph = glyph.into_unpositioned().positioned(caret);
-                last_glyph_id = None;
-            }
-        }
-        caret.x += glyph.unpositioned().h_metrics().advance_width;
-        result.push(glyph);
-    }
-    result
 }

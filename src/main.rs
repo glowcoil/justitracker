@@ -28,11 +28,30 @@ fn main() {
 
     let mut renderer = Renderer::new(display, width, height, dpi_factor);
 
-    let mut ui = UI::new();
-    let button = ui.add(Widget::Button { x: 10.0, y: 10.0, text: "button", state: ButtonState::Up });
+    let mut ui = UI::new(width as f32, height as f32);
+    let button = ui.button("button");
+    ui.make_root(button);
 
     events_loop.run_forever(|ev| {
+        match ev {
+            glutin::Event::WindowEvent { ref event, .. } => match *event {
+                glutin::WindowEvent::Closed => return glutin::ControlFlow::Break,
+                _ => {}
+            },
+            _ => {}
+        };
+
         ui.handle_event(ev);
+
+        while let Some(ui_event) = ui.get_event() {
+            match ui_event {
+                UIEvent::ButtonPress(id) => {
+                    println!("{}", id);
+                }
+                _ => {}
+            }
+        }
+
         renderer.render(ui.display());
 
         glutin::ControlFlow::Continue
