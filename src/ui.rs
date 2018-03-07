@@ -139,7 +139,7 @@ impl<'a> UI<'a> {
                 list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
-            _ => {}
+            Widget::Empty => {}
         }
     }
 
@@ -161,7 +161,7 @@ impl<'a> UI<'a> {
             Widget::Button { .. } => {
                 return Some((x, y, id))
             },
-            _ => return None,
+            Widget::Empty => return None,
         }
     }
 
@@ -171,7 +171,7 @@ impl<'a> UI<'a> {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
                 (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
-            _ => (None, None)
+            Widget::Empty => (None, None)
         }
     }
 }
