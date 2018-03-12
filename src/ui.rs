@@ -11,10 +11,14 @@ pub struct UI<'a> {
     height: f32,
     widgets: Vec<Widget>,
     root: WidgetID,
+
     mouse_x: f32,
     mouse_y: f32,
     mouse_holding: Option<WidgetID>,
+    focus: Option<WidgetID>,
+
     events: VecDeque<UIEvent>,
+
     font: Font<'a>,
     scale: Scale,
 }
@@ -26,6 +30,9 @@ enum Widget {
     // ScrollBox { contents: WidgetID },
     Button {
         text: &'static str,
+    },
+    Textbox {
+        text: String,
     },
 }
 
@@ -45,10 +52,14 @@ impl<'a> UI<'a> {
             height: height,
             widgets: vec![Widget::Empty],
             root: 0,
+
             mouse_x: 0.0,
             mouse_y: 0.0,
             mouse_holding: None,
+            focus: None,
+
             events: VecDeque::new(),
+
             font: font,
             scale: Scale::uniform(14.0),
         }
@@ -56,6 +67,10 @@ impl<'a> UI<'a> {
 
     pub fn button(&mut self, text: &'static str) -> WidgetID {
         self.add(Widget::Button { text: text })
+    }
+
+    pub fn textbox(&mut self) -> WidgetID {
+        self.add(Widget::Textbox { text: String::new() })
     }
 
     fn add(&mut self, widget: Widget) -> WidgetID {
@@ -68,19 +83,27 @@ impl<'a> UI<'a> {
         self.root = id;
     }
 
+    pub fn focus(&mut self, id: WidgetID) {
+        self.focus = Some(id);
+    }
+
+    pub fn defocus(&mut self) {
+        self.focus = None;
+    }
+
     pub fn handle_event(&mut self, ev: glutin::Event) {
         match ev {
             glutin::Event::WindowEvent { event, .. } => match event {
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
                     self.mouse_x = x as f32;
                     self.mouse_y = y as f32;
-                },
-                glutin::WindowEvent::MouseInput { device_id, state: mouse_state, button, modifiers } => {
+                }
+                glutin::WindowEvent::MouseInput { device_id: _, state: mouse_state, button: _, modifiers: _ } => {
                     match mouse_state {
                         glutin::ElementState::Pressed => {
-                            if let Some((widget_x, widget_y, id)) = self.get_widget_at(self.mouse_x, self.mouse_y) {
+                            if let Some((_widget_x, _widget_y, id)) = self.get_widget_at(self.mouse_x, self.mouse_y) {
                                 match self.widgets[id] {
-                                    Widget::Button { .. } => {
+                                    Widget::Button { .. } | Widget::Textbox { .. } => {
                                         self.mouse_holding = Some(id);
                                     }
                                     _ => {}
@@ -91,15 +114,46 @@ impl<'a> UI<'a> {
                             if let Some(id) = self.mouse_holding {
                                 match self.widgets[id] {
                                     Widget::Button { .. } => {
-                                        self.events.push_back(UIEvent::ButtonPress(id))
+                                        self.events.push_back(UIEvent::ButtonPress(id));
+                                    }
+                                    Widget::Textbox { .. } => {
+                                        self.focus(id);
                                     }
                                     _ => {}
                                 }
                             }
                             self.mouse_holding = None;
                         },
-                    };
-                },
+                    }
+                }
+                glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
+                    if let Some(focus) = self.focus {
+                        match self.widgets[focus] {
+                            Widget::Textbox { ref mut text } => {
+                                if input.state == glutin::ElementState::Pressed {
+                                    if let Some(keycode) = input.virtual_keycode {
+                                        if keycode == glutin::VirtualKeyCode::Back {
+                                            text.pop();
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                glutin::WindowEvent::ReceivedCharacter(c) => {
+                    if let Some(focus) = self.focus {
+                        match self.widgets[focus] {
+                            Widget::Textbox { ref mut text } => {
+                                if !c.is_control() {
+                                    text.push(c);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 _ => (),
             },
             _ => (),
@@ -139,6 +193,16 @@ impl<'a> UI<'a> {
                 list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
+            Widget::Textbox { ref text } => {
+                let color = [0.1, 0.2, 0.4, 1.0];
+
+                let font = &self.font;
+                let (width, height) = get_label_size(font, self.scale, text);
+                let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, text);
+
+                list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
+                list.glyphs.append(&mut glyphs);
+            }
             Widget::Empty => {}
         }
     }
@@ -159,15 +223,22 @@ impl<'a> UI<'a> {
     fn get_child_widget_at(&self, id: WidgetID, x: f32, y: f32) -> Option<(f32, f32, WidgetID)> {
         match self.widgets[id] {
             Widget::Button { .. } => {
-                return Some((x, y, id))
-            },
-            Widget::Empty => return None,
+                Some((x, y, id))
+            }
+            Widget::Textbox { .. } => {
+                Some((x, y, id))
+            }
+            Widget::Empty => None
         }
     }
 
     fn get_widget_size(&self, id: WidgetID) -> (Option<f32>, Option<f32>) {
         match self.widgets[id] {
             Widget::Button { text } => {
+                let (width, height) = get_label_size(&self.font, self.scale, text);
+                (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
+            }
+            Widget::Textbox { ref text } => {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
                 (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
@@ -230,7 +301,7 @@ fn layout_label<'a>(font: &'a Font,
             caret.x += font.pair_kerning(scale, id, base_glyph.id());
         }
         last_glyph_id = Some(base_glyph.id());
-        let mut glyph = base_glyph.scaled(scale).positioned(caret);
+        let glyph = base_glyph.scaled(scale).positioned(caret);
         caret.x += glyph.unpositioned().h_metrics().advance_width;
         result.push(glyph.standalone());
     }

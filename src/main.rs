@@ -32,8 +32,9 @@ fn main() {
     let mut renderer = Renderer::new(display, width, height, dpi_factor);
 
     let mut ui = UI::new(width as f32, height as f32);
-    let button = ui.button("button");
-    ui.make_root(button);
+    // let button = ui.button("button");
+    let textbox = ui.textbox();
+    ui.make_root(textbox);
 
     let audio_send = start_audio_thread();
 
@@ -51,7 +52,7 @@ fn main() {
         while let Some(ui_event) = ui.get_event() {
             match ui_event {
                 UIEvent::ButtonPress(id) => {
-                    audio_send.send(1);
+                    audio_send.send(1).unwrap();
                     println!("{}", id);
                 }
             }
