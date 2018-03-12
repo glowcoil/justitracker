@@ -25,9 +25,8 @@ pub struct UI<'a> {
 
 enum Widget {
     Empty,
-    // HList(Vec<WidgetID>),
-    // VList(Vec<WidgetID>),
     // ScrollBox { contents: WidgetID },
+    Stack(Vec<WidgetID>),
     Button {
         text: &'static str,
     },
@@ -71,6 +70,10 @@ impl<'a> UI<'a> {
 
     pub fn textbox(&mut self) -> WidgetID {
         self.add(Widget::Textbox { text: String::new() })
+    }
+
+    pub fn stack(&mut self, ids: Vec<WidgetID>) -> WidgetID {
+        self.add(Widget::Stack(ids))
     }
 
     fn add(&mut self, widget: Widget) -> WidgetID {
@@ -203,6 +206,16 @@ impl<'a> UI<'a> {
                 list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
+            Widget::Stack(ref widgets) => {
+                let mut offset_y = offset_y;
+                for widget in widgets.iter() {
+                    self.display_widget(*widget, offset_x, offset_y, list);
+                    let (_, child_height) = self.get_widget_size(*widget);
+                    if let Some(child_height) = child_height {
+                        offset_y += child_height + PADDING;
+                    }
+                }
+            }
             Widget::Empty => {}
         }
     }
@@ -228,6 +241,19 @@ impl<'a> UI<'a> {
             Widget::Textbox { .. } => {
                 Some((x, y, id))
             }
+            Widget::Stack(ref widgets) => {
+                let mut child_y = 0.0;
+                for widget in widgets.iter() {
+                    let (_, child_height) = self.get_widget_size(*widget);
+                    if let Some(child_height) = child_height {
+                        if y >= child_y && y < child_y + child_height {
+                            return Some((x, y, *widget));
+                        }
+                        child_y += child_height;
+                    }
+                }
+                None
+            }
             Widget::Empty => None
         }
     }
@@ -241,6 +267,16 @@ impl<'a> UI<'a> {
             Widget::Textbox { ref text } => {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
                 (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
+            }
+            Widget::Stack(ref widgets) => {
+                let mut width = 0.0;
+                let mut height = 0.0;
+                for widget in widgets.iter() {
+                    let (child_width, child_height) = self.get_widget_size(*widget);
+                    if let Some(child_width) = child_width { width += child_width; }
+                    if let Some(child_height) = child_height { height += child_height; }
+                }
+                (Some(width), Some(height))
             }
             Widget::Empty => (None, None)
         }
