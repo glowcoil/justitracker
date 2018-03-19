@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use glium::glutin;
 use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
@@ -17,28 +16,56 @@ pub struct UI<'a> {
     mouse_holding: Option<WidgetID>,
     focus: Option<WidgetID>,
 
-    events: VecDeque<UIEvent>,
-
     font: Font<'a>,
     scale: Scale,
 }
 
-enum Widget {
+pub enum Widget {
     Empty,
-    // ScrollBox { contents: WidgetID },
-    Stack(Vec<WidgetID>),
-    Button {
-        text: &'static str,
-    },
-    Textbox {
-        text: String,
-    },
+    Stack(Stack),
+    Button(Button),
+    Textbox(Textbox),
+}
+
+pub struct Stack {
+    children: Vec<WidgetID>,
+}
+
+pub struct Button {
+    text: &'static str,
+    on_press: Option<Box<Fn()>>,
+}
+
+impl Button {
+    pub fn new(text: &'static str) -> Button {
+        Button { text: text, on_press: None }
+    }
+
+    pub fn on_press<F>(&mut self, callback: F) where F: 'static + Fn() {
+        self.on_press = Some(Box::new(callback));
+    }
+}
+
+pub struct Textbox {
+    text: String,
 }
 
 const PADDING: f32 = 4.0;
 
-pub enum UIEvent {
-    ButtonPress(WidgetID),
+impl Widget {
+    pub fn as_button(&mut self) -> Option<&mut Button> {
+        match *self {
+            Widget::Button(ref mut button) => Some(button),
+            _ => None,
+        }
+    }
+
+    pub fn as_textbox(&mut self) -> Option<&mut Textbox> {
+        match *self {
+            Widget::Textbox(ref mut textbox) => Some(textbox),
+            _ => None,
+        }
+    }
 }
 
 impl<'a> UI<'a> {
@@ -57,29 +84,35 @@ impl<'a> UI<'a> {
             mouse_holding: None,
             focus: None,
 
-            events: VecDeque::new(),
-
             font: font,
             scale: Scale::uniform(14.0),
         }
     }
 
     pub fn button(&mut self, text: &'static str) -> WidgetID {
-        self.add(Widget::Button { text: text })
+        self.add(Widget::Button(Button::new(text)))
     }
 
     pub fn textbox(&mut self) -> WidgetID {
-        self.add(Widget::Textbox { text: String::new() })
+        self.add(Widget::Textbox(Textbox { text: String::new() }))
     }
 
     pub fn stack(&mut self, ids: Vec<WidgetID>) -> WidgetID {
-        self.add(Widget::Stack(ids))
+        self.add(Widget::Stack(Stack { children: ids }))
     }
 
     fn add(&mut self, widget: Widget) -> WidgetID {
         let id = self.widgets.len();
         self.widgets.push(widget);
         id
+    }
+
+    pub fn get(&self, id: WidgetID) -> &Widget {
+        &self.widgets[id]
+    }
+
+    pub fn get_mut(&mut self, id: WidgetID) -> &mut Widget {
+        &mut self.widgets[id]
     }
 
     pub fn make_root(&mut self, id: WidgetID) {
@@ -117,7 +150,9 @@ impl<'a> UI<'a> {
                             if let Some(id) = self.mouse_holding {
                                 match self.widgets[id] {
                                     Widget::Button { .. } => {
-                                        self.events.push_back(UIEvent::ButtonPress(id));
+                                        if let Some(ref on_press) = self.widgets[id].as_button().unwrap().on_press {
+                                            on_press();
+                                        }
                                     }
                                     Widget::Textbox { .. } => {
                                         self.focus(id);
@@ -132,7 +167,7 @@ impl<'a> UI<'a> {
                 glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
                     if let Some(focus) = self.focus {
                         match self.widgets[focus] {
-                            Widget::Textbox { ref mut text } => {
+                            Widget::Textbox(Textbox { ref mut text }) => {
                                 if input.state == glutin::ElementState::Pressed {
                                     if let Some(keycode) = input.virtual_keycode {
                                         if keycode == glutin::VirtualKeyCode::Back {
@@ -148,7 +183,7 @@ impl<'a> UI<'a> {
                 glutin::WindowEvent::ReceivedCharacter(c) => {
                     if let Some(focus) = self.focus {
                         match self.widgets[focus] {
-                            Widget::Textbox { ref mut text } => {
+                            Widget::Textbox(Textbox { ref mut text }) => {
                                 if !c.is_control() {
                                     text.push(c);
                                 }
@@ -161,10 +196,6 @@ impl<'a> UI<'a> {
             },
             _ => (),
         }
-    }
-
-    pub fn get_event(&mut self) -> Option<UIEvent> {
-        self.events.pop_front()
     }
 
     pub fn display(&self) -> DisplayList<'a> {
@@ -180,7 +211,7 @@ impl<'a> UI<'a> {
 
     fn display_widget(&self, id: WidgetID, offset_x: f32, offset_y: f32, list: &mut DisplayList<'a>) {
         match self.widgets[id] {
-            Widget::Button { text } => {
+            Widget::Button(ref button) => {
                 let color = if self.mouse_holding.is_some() && self.mouse_holding.unwrap() == id {
                     [0.1, 0.2, 0.4, 1.0]
                 } else if offset_x < self.mouse_x && self.mouse_x < offset_x + 60.0 && offset_y < self.mouse_y && self.mouse_y < offset_y + 20.0 {
@@ -190,25 +221,25 @@ impl<'a> UI<'a> {
                 };
 
                 let font = &self.font;
-                let (width, height) = get_label_size(font, self.scale, text);
-                let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, text);
+                let (width, height) = get_label_size(font, self.scale, button.text);
+                let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, button.text);
 
                 list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
-            Widget::Textbox { ref text } => {
+            Widget::Textbox(Textbox { ref text }) => {
                 let color = [0.1, 0.2, 0.4, 1.0];
 
                 let font = &self.font;
                 let (width, height) = get_label_size(font, self.scale, text);
                 let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, text);
 
-                list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
+                list.rects.push(Rect { x: offset_x, y: offset_y, w: width.max(40.0) + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
-            Widget::Stack(ref widgets) => {
+            Widget::Stack(Stack { ref children } ) => {
                 let mut offset_y = offset_y;
-                for widget in widgets.iter() {
+                for widget in children.iter() {
                     self.display_widget(*widget, offset_x, offset_y, list);
                     let (_, child_height) = self.get_widget_size(*widget);
                     if let Some(child_height) = child_height {
@@ -235,15 +266,15 @@ impl<'a> UI<'a> {
 
     fn get_child_widget_at(&self, id: WidgetID, x: f32, y: f32) -> Option<(f32, f32, WidgetID)> {
         match self.widgets[id] {
-            Widget::Button { .. } => {
+            Widget::Button(..) => {
                 Some((x, y, id))
             }
-            Widget::Textbox { .. } => {
+            Widget::Textbox(..) => {
                 Some((x, y, id))
             }
-            Widget::Stack(ref widgets) => {
+            Widget::Stack(Stack { ref children }) => {
                 let mut child_y = 0.0;
-                for widget in widgets.iter() {
+                for widget in children.iter() {
                     let (_, child_height) = self.get_widget_size(*widget);
                     if let Some(child_height) = child_height {
                         if y >= child_y && y < child_y + child_height {
@@ -260,18 +291,18 @@ impl<'a> UI<'a> {
 
     fn get_widget_size(&self, id: WidgetID) -> (Option<f32>, Option<f32>) {
         match self.widgets[id] {
-            Widget::Button { text } => {
-                let (width, height) = get_label_size(&self.font, self.scale, text);
+            Widget::Button(ref button) => {
+                let (width, height) = get_label_size(&self.font, self.scale, button.text);
                 (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
-            Widget::Textbox { ref text } => {
+            Widget::Textbox(Textbox { ref text }) => {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
-                (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
+                (Some(width.max(40.0) + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
-            Widget::Stack(ref widgets) => {
+            Widget::Stack(Stack { ref children }) => {
                 let mut width = 0.0;
                 let mut height = 0.0;
-                for widget in widgets.iter() {
+                for widget in children.iter() {
                     let (child_width, child_height) = self.get_widget_size(*widget);
                     if let Some(child_width) = child_width { width += child_width; }
                     if let Some(child_height) = child_height { height += child_height; }

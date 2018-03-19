@@ -33,9 +33,15 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
     let button = ui.button("button");
-    let textbox = ui.textbox();
-    let stack = ui.stack(vec![button, textbox]);
+    let mut boxes = vec![button];
+    for _i in 0..10 {
+        let textbox = ui.textbox();
+        boxes.push(textbox);
+    }
+    let stack = ui.stack(boxes);
     ui.make_root(stack);
+
+    ui.get_mut(button).as_button().unwrap().on_press(|| println!("test"));
 
     let audio_send = start_audio_thread();
 
@@ -49,14 +55,6 @@ fn main() {
         };
 
         ui.handle_event(ev);
-
-        while let Some(ui_event) = ui.get_event() {
-            match ui_event {
-                UIEvent::ButtonPress(id) => {
-                    audio_send.send(1).unwrap();
-                }
-            }
-        }
 
         renderer.render(ui.display());
 
