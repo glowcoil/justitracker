@@ -11,9 +11,17 @@ extern crate cpal;
 
 use glium::glutin;
 
+use std::collections::VecDeque;
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use render::*;
 use ui::*;
 use audio::*;
+
+enum Message {
+    Play,
+}
 
 fn main() {
     let mut events_loop = glutin::EventsLoop::new();
@@ -31,6 +39,8 @@ fn main() {
 
     let mut renderer = Renderer::new(display, width, height, dpi_factor);
 
+    let messages: Rc<RefCell<VecDeque<Message>>> = Rc::new(RefCell::new(VecDeque::new()));
+
     let mut ui = UI::new(width as f32, height as f32);
     let button = ui.button("button");
     let mut boxes = vec![button];
@@ -41,7 +51,12 @@ fn main() {
     let stack = ui.stack(boxes);
     ui.make_root(stack);
 
-    ui.get_mut(button).as_button().unwrap().on_press(|| println!("test"));
+    ui.get_mut(button).as_button().unwrap().on_press({
+        let messages = messages.clone();
+        move || {
+            messages.borrow_mut().push_back(Message::Play);
+        }
+    });
 
     let audio_send = start_audio_thread();
 
@@ -55,6 +70,14 @@ fn main() {
         };
 
         ui.handle_event(ev);
+
+        while let Some(message) = messages.borrow_mut().pop_front() {
+            match message {
+                Message::Play => {
+                    audio_send.send(1).unwrap();
+                }
+            }
+        }
 
         renderer.render(ui.display());
 
