@@ -150,8 +150,12 @@ impl<'a> UI<'a> {
                             if let Some(id) = self.mouse_holding {
                                 match self.widgets[id] {
                                     Widget::Button { .. } => {
-                                        if let Some(ref on_press) = self.widgets[id].as_button().unwrap().on_press {
-                                            on_press();
+                                        if let Some((_widget_x, _widget_y, hover_id)) = self.get_widget_at(self.mouse_x, self.mouse_y) {
+                                            if hover_id == id {
+                                                if let Some(ref on_press) = self.widgets[id].as_button().unwrap().on_press {
+                                                    on_press();
+                                                }
+                                            }
                                         }
                                     }
                                     Widget::Textbox { .. } => {
