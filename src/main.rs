@@ -21,6 +21,7 @@ use audio::*;
 
 enum Message {
     Play,
+    SetPitch(f32),
 }
 
 fn main() {
@@ -40,21 +41,30 @@ fn main() {
     let mut renderer = Renderer::new(display, width, height, dpi_factor);
 
     let messages: Rc<RefCell<VecDeque<Message>>> = Rc::new(RefCell::new(VecDeque::new()));
+    let mut song: [f32; 8] = [0.0; 8];
 
     let mut ui = UI::new(width as f32, height as f32);
-    let button = ui.button("button");
-    let mut boxes = vec![button];
-    for _i in 0..10 {
+    let play_button = ui.button("play");
+    let mut boxes = vec![play_button];
+    // for i in 0..8 {
         let textbox = ui.textbox();
         boxes.push(textbox);
-    }
+    // }
     let stack = ui.stack(boxes);
     ui.make_root(stack);
 
-    ui.get_mut(button).as_button().unwrap().on_press({
+    ui.get_mut(play_button).as_button().unwrap().on_press({
         let messages = messages.clone();
         move || {
             messages.borrow_mut().push_back(Message::Play);
+        }
+    });
+    ui.get_mut(textbox).as_textbox().unwrap().on_change({
+        let messages = messages.clone();
+        move |text| {
+            if let Ok(p) = text.parse::<f32>() {
+                messages.borrow_mut().push_back(Message::SetPitch(p));
+            }
         }
     });
 
@@ -74,7 +84,10 @@ fn main() {
         while let Some(message) = messages.borrow_mut().pop_front() {
             match message {
                 Message::Play => {
-                    audio_send.send(1).unwrap();
+                    audio_send.send(AudioMessage::Play).unwrap();
+                }
+                Message::SetPitch(p) => {
+                    audio_send.send(AudioMessage::SetPitch(p)).unwrap();
                 }
             }
         }
