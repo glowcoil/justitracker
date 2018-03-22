@@ -48,6 +48,17 @@ impl Button {
 
 pub struct Textbox {
     text: String,
+    on_change: Option<Box<Fn(&str)>>,
+}
+
+impl Textbox {
+    pub fn new() -> Textbox {
+        Textbox { text: String::new(), on_change: None }
+    }
+
+    pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(&str) {
+        self.on_change = Some(Box::new(callback));
+    }
 }
 
 const PADDING: f32 = 4.0;
@@ -94,7 +105,7 @@ impl<'a> UI<'a> {
     }
 
     pub fn textbox(&mut self) -> WidgetID {
-        self.add(Widget::Textbox(Textbox { text: String::new() }))
+        self.add(Widget::Textbox(Textbox::new()))
     }
 
     pub fn stack(&mut self, ids: Vec<WidgetID>) -> WidgetID {
@@ -171,11 +182,14 @@ impl<'a> UI<'a> {
                 glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
                     if let Some(focus) = self.focus {
                         match self.widgets[focus] {
-                            Widget::Textbox(Textbox { ref mut text }) => {
+                            Widget::Textbox(Textbox { ref mut text, ref on_change }) => {
                                 if input.state == glutin::ElementState::Pressed {
                                     if let Some(keycode) = input.virtual_keycode {
                                         if keycode == glutin::VirtualKeyCode::Back {
                                             text.pop();
+                                            if let Some(ref on_change) = *on_change {
+                                                on_change(text);
+                                            }
                                         }
                                     }
                                 }
@@ -187,9 +201,12 @@ impl<'a> UI<'a> {
                 glutin::WindowEvent::ReceivedCharacter(c) => {
                     if let Some(focus) = self.focus {
                         match self.widgets[focus] {
-                            Widget::Textbox(Textbox { ref mut text }) => {
+                            Widget::Textbox(Textbox { ref mut text, ref on_change }) => {
                                 if !c.is_control() {
                                     text.push(c);
+                                    if let Some(ref on_change) = *on_change {
+                                        on_change(text);
+                                    }
                                 }
                             }
                             _ => {}
@@ -231,7 +248,7 @@ impl<'a> UI<'a> {
                 list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
-            Widget::Textbox(Textbox { ref text }) => {
+            Widget::Textbox(Textbox { ref text, .. }) => {
                 let color = [0.1, 0.2, 0.4, 1.0];
 
                 let font = &self.font;
@@ -299,7 +316,7 @@ impl<'a> UI<'a> {
                 let (width, height) = get_label_size(&self.font, self.scale, button.text);
                 (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
-            Widget::Textbox(Textbox { ref text }) => {
+            Widget::Textbox(Textbox { ref text, .. }) => {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
                 (Some(width.max(40.0) + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
