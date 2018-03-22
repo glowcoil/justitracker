@@ -301,7 +301,7 @@ impl<'a> UI<'a> {
                         if y >= child_y && y < child_y + child_height {
                             return Some((x, y, *widget));
                         }
-                        child_y += child_height;
+                        child_y += child_height + PADDING;
                     }
                 }
                 None
@@ -321,12 +321,12 @@ impl<'a> UI<'a> {
                 (Some(width.max(40.0) + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
             Widget::Stack(Stack { ref children }) => {
-                let mut width = 0.0;
-                let mut height = 0.0;
+                let mut width: f32 = 0.0;
+                let mut height: f32 = 0.0;
                 for widget in children.iter() {
                     let (child_width, child_height) = self.get_widget_size(*widget);
-                    if let Some(child_width) = child_width { width += child_width; }
-                    if let Some(child_height) = child_height { height += child_height; }
+                    if let Some(child_width) = child_width { width = width.max(child_width); }
+                    if let Some(child_height) = child_height { height += child_height + PADDING; }
                 }
                 (Some(width), Some(height))
             }
