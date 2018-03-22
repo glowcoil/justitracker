@@ -21,7 +21,8 @@ use audio::*;
 
 enum Message {
     Play,
-    SetPitch(f32),
+    Stop,
+    SetNote { note: usize, pitch: f32 },
 }
 
 fn main() {
@@ -45,12 +46,15 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
     let play_button = ui.button("play");
-    let mut boxes = vec![play_button];
-    // for i in 0..8 {
+    let stop_button = ui.button("stop");
+    let mut children = vec![play_button, stop_button];
+    let mut boxes = vec![];
+    for i in 0..8 {
         let textbox = ui.textbox();
+        children.push(textbox);
         boxes.push(textbox);
-    // }
-    let stack = ui.stack(boxes);
+    }
+    let stack = ui.stack(children);
     ui.make_root(stack);
 
     ui.get_mut(play_button).as_button().unwrap().on_press({
@@ -59,14 +63,22 @@ fn main() {
             messages.borrow_mut().push_back(Message::Play);
         }
     });
-    ui.get_mut(textbox).as_textbox().unwrap().on_change({
+    ui.get_mut(stop_button).as_button().unwrap().on_press({
         let messages = messages.clone();
-        move |text| {
-            if let Ok(p) = text.parse::<f32>() {
-                messages.borrow_mut().push_back(Message::SetPitch(p));
-            }
+        move || {
+            messages.borrow_mut().push_back(Message::Stop);
         }
     });
+    for (i, textbox) in boxes.iter().enumerate() {
+        ui.get_mut(*textbox).as_textbox().unwrap().on_change({
+            let messages = messages.clone();
+            move |text| {
+                if let Ok(p) = text.parse::<f32>() {
+                    messages.borrow_mut().push_back(Message::SetNote { note: i, pitch: p });
+                }
+            }
+        });
+    }
 
     let audio_send = start_audio_thread();
 
@@ -86,8 +98,12 @@ fn main() {
                 Message::Play => {
                     audio_send.send(AudioMessage::Play).unwrap();
                 }
-                Message::SetPitch(p) => {
-                    audio_send.send(AudioMessage::SetPitch(p)).unwrap();
+                Message::Stop => {
+                    audio_send.send(AudioMessage::Stop).unwrap();
+                }
+                Message::SetNote { note, pitch } => {
+                    song[note] = pitch;
+                    audio_send.send(AudioMessage::Song(song)).unwrap();
                 }
             }
         }

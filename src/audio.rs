@@ -8,7 +8,8 @@ use cpal::{EventLoop, UnknownTypeBuffer};
 
 pub enum AudioMessage {
     Play,
-    SetPitch(f32),
+    Stop,
+    Song([f32; 8]),
 }
 
 pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
@@ -26,14 +27,20 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
         let voice_id = event_loop.build_voice(&endpoint, &format).unwrap();
         event_loop.play(voice_id);
 
-        let mut phase: f32 = 0.0;
         let mut playing = false;
+
+        let bpm: f32 = 120.0;
+        let mut t: f32 = 0.0;
+        let mut note: usize = 0;
+
+        let mut phase: f32 = 0.0;
         let mut sin: [f32; 128] = [0.0; 128];
         for (i, x) in sin.iter_mut().enumerate() {
             *x = (i as f32 * 2.0 * consts::PI / 128.0).sin();
         }
 
-        let mut pitch: f32 = 1.0;
+        let root = 55.0 * sin.len() as f32 / format.samples_rate.0 as f32;
+        let mut song: [f32; 8] = [0.0; 8];
 
         event_loop.run(move |_voice_id, buffer| {
             for msg in recv.try_iter() {
@@ -41,8 +48,14 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                     AudioMessage::Play => {
                         playing = true;
                     }
-                    AudioMessage::SetPitch(p) => {
-                        pitch = p;
+                    AudioMessage::Stop => {
+                        playing = false;
+                        t = 0.0;
+                        phase = 0.0;
+                        note = 0;
+                    }
+                    AudioMessage::Song(s) => {
+                        song = s;
                     }
                 }
             }
@@ -61,6 +74,15 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                 UnknownTypeBuffer::F32(mut buffer) => {
                     for elem in buffer.iter_mut() {
                         if playing {
+                            t += 1.0 / format.samples_rate.0 as f32;
+                            let note_length = 60.0 / bpm;
+                            if t > note_length {
+                                t -= note_length;
+                                phase = 0.0;
+                                note = (note + 1) % 8;
+                            }
+
+                            let pitch = song[note] * root;
                             phase = (phase + pitch) % sin.len() as f32;
 
                             let phase_whole = phase as usize;
