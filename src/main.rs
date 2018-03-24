@@ -73,8 +73,20 @@ fn main() {
         ui.get_mut(*textbox).as_textbox().unwrap().on_change({
             let messages = messages.clone();
             move |text| {
-                if let Ok(p) = text.parse::<f32>() {
-                    messages.borrow_mut().push_back(Message::SetNote { note: i, pitch: p });
+                let fraction: Vec<&str> = text.split("/").collect();
+                if fraction.len() > 0 {
+                    if let Ok(p) = fraction[0].parse::<f32>() {
+                        let q = if fraction.len() == 2 {
+                            if let Ok(q) = fraction[1].parse::<f32>() {
+                                q
+                            } else {
+                                return;
+                            }
+                        } else {
+                            1.0
+                        };
+                        messages.borrow_mut().push_back(Message::SetNote { note: i, pitch: p / q });
+                    }
                 }
             }
         });
