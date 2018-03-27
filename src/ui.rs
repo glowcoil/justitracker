@@ -61,7 +61,8 @@ impl Textbox {
     }
 }
 
-const PADDING: f32 = 4.0;
+const PADDING: f32 = 8.0;
+const SPACING: f32 = 2.0;
 
 impl Widget {
     pub fn as_button(&mut self) -> Option<&mut Button> {
@@ -233,23 +234,26 @@ impl<'a> UI<'a> {
     fn display_widget(&self, id: WidgetID, offset_x: f32, offset_y: f32, list: &mut DisplayList<'a>) {
         match self.widgets[id] {
             Widget::Button(ref button) => {
+                let (width, height) = self.get_widget_size(id);
+                let width = width.unwrap();
+                let height = height.unwrap();
+
                 let color = if self.mouse_holding.is_some() && self.mouse_holding.unwrap() == id {
-                    [0.1, 0.2, 0.4, 1.0]
-                } else if offset_x < self.mouse_x && self.mouse_x < offset_x + 60.0 && offset_y < self.mouse_y && self.mouse_y < offset_y + 20.0 {
-                    [0.3, 0.4, 1.0, 1.0]
+                    [0.02, 0.2, 0.6, 1.0]
+                } else if offset_x < self.mouse_x && self.mouse_x < offset_x + width && offset_y < self.mouse_y && self.mouse_y < offset_y + height {
+                    [0.3, 0.45, 0.75, 1.0]
                 } else {
-                    [0.1, 0.3, 0.8, 1.0]
+                    [0.15, 0.18, 0.23, 1.0]
                 };
 
                 let font = &self.font;
-                let (width, height) = get_label_size(font, self.scale, button.text);
                 let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, button.text);
 
-                list.rects.push(Rect { x: offset_x, y: offset_y, w: width + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
+                list.rects.push(Rect { x: offset_x, y: offset_y, w: width, h: height, color: color });
                 list.glyphs.append(&mut glyphs);
             }
             Widget::Textbox(Textbox { ref text, .. }) => {
-                let color = [0.1, 0.2, 0.4, 1.0];
+                let color = [0.1, 0.15, 0.2, 1.0];
 
                 let font = &self.font;
                 let (width, height) = get_label_size(font, self.scale, text);
@@ -264,7 +268,7 @@ impl<'a> UI<'a> {
                     self.display_widget(*widget, offset_x, offset_y, list);
                     let (_, child_height) = self.get_widget_size(*widget);
                     if let Some(child_height) = child_height {
-                        offset_y += child_height + PADDING;
+                        offset_y += child_height + SPACING;
                     }
                 }
             }
@@ -301,7 +305,7 @@ impl<'a> UI<'a> {
                         if y >= child_y && y < child_y + child_height {
                             return Some((x, y, *widget));
                         }
-                        child_y += child_height + PADDING;
+                        child_y += child_height + SPACING;
                     }
                 }
                 None
@@ -326,7 +330,7 @@ impl<'a> UI<'a> {
                 for widget in children.iter() {
                     let (child_width, child_height) = self.get_widget_size(*widget);
                     if let Some(child_width) = child_width { width = width.max(child_width); }
-                    if let Some(child_height) = child_height { height += child_height + PADDING; }
+                    if let Some(child_height) = child_height { height += child_height; }
                 }
                 (Some(width), Some(height))
             }
@@ -334,11 +338,6 @@ impl<'a> UI<'a> {
         }
     }
 }
-
-// let font = &self.font;
-// let glyphs: Vec<PositionedGlyph> = texts.iter().flat_map(|t| {
-//     layout_paragraph(font, Scale::uniform(14.0 * self.dpi_factor), t.x, t.y, self.width, &t.text)
-// }).collect();
 
 fn get_label_size<'a>(font: &'a Font,
                       scale: Scale,

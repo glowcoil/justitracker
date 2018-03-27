@@ -78,7 +78,7 @@ impl Renderer {
 
     pub fn render(&mut self, display_list: DisplayList) {
         let mut target = self.display.draw();
-        target.clear_color(0.0, 0.03, 0.1, 1.0);
+        target.clear_color(0.01, 0.015, 0.02, 1.0);
 
         self.render_rects(&mut target, display_list.rects);
         self.render_glyphs(&mut target, display_list.glyphs);
