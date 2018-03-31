@@ -54,8 +54,8 @@ fn main() {
         children.push(textbox);
         boxes.push(textbox);
     }
-    let stack = ui.stack(children);
-    ui.make_root(stack);
+    let column = ui.column(children);
+    ui.make_root(column);
 
     ui.get_mut(play_button).as_button().unwrap().on_press({
         let messages = messages.clone();

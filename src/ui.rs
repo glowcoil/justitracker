@@ -22,12 +22,17 @@ pub struct UI<'a> {
 
 pub enum Widget {
     Empty,
-    Stack(Stack),
+    Column(Column),
+    Row(Row),
     Button(Button),
     Textbox(Textbox),
 }
 
-pub struct Stack {
+pub struct Column {
+    children: Vec<WidgetID>,
+}
+
+pub struct Row {
     children: Vec<WidgetID>,
 }
 
@@ -109,8 +114,12 @@ impl<'a> UI<'a> {
         self.add(Widget::Textbox(Textbox::new()))
     }
 
-    pub fn stack(&mut self, ids: Vec<WidgetID>) -> WidgetID {
-        self.add(Widget::Stack(Stack { children: ids }))
+    pub fn column(&mut self, ids: Vec<WidgetID>) -> WidgetID {
+        self.add(Widget::Column(Column { children: ids }))
+    }
+
+    pub fn row(&mut self, ids: Vec<WidgetID>) -> WidgetID {
+        self.add(Widget::Row(Row { children: ids }))
     }
 
     fn add(&mut self, widget: Widget) -> WidgetID {
@@ -262,13 +271,23 @@ impl<'a> UI<'a> {
                 list.rects.push(Rect { x: offset_x, y: offset_y, w: width.max(40.0) + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
                 list.glyphs.append(&mut glyphs);
             }
-            Widget::Stack(Stack { ref children } ) => {
+            Widget::Column(Column { ref children } ) => {
                 let mut offset_y = offset_y;
                 for widget in children.iter() {
                     self.display_widget(*widget, offset_x, offset_y, list);
                     let (_, child_height) = self.get_widget_size(*widget);
                     if let Some(child_height) = child_height {
                         offset_y += child_height + SPACING;
+                    }
+                }
+            }
+            Widget::Row(Row { ref children } ) => {
+                let mut offset_x = offset_x;
+                for widget in children.iter() {
+                    self.display_widget(*widget, offset_x, offset_y, list);
+                    let (child_width, _) = self.get_widget_size(*widget);
+                    if let Some(child_width) = child_width {
+                        offset_x += child_width + SPACING;
                     }
                 }
             }
@@ -297,7 +316,7 @@ impl<'a> UI<'a> {
             Widget::Textbox(..) => {
                 Some((x, y, id))
             }
-            Widget::Stack(Stack { ref children }) => {
+            Widget::Column(Column { ref children }) => {
                 let mut child_y = 0.0;
                 for widget in children.iter() {
                     let (_, child_height) = self.get_widget_size(*widget);
@@ -306,6 +325,19 @@ impl<'a> UI<'a> {
                             return Some((x, y, *widget));
                         }
                         child_y += child_height + SPACING;
+                    }
+                }
+                None
+            }
+            Widget::Row(Row { ref children }) => {
+                let mut child_x = 0.0;
+                for widget in children.iter() {
+                    let (child_width, _) = self.get_widget_size(*widget);
+                    if let Some(child_width) = child_width {
+                        if x >= child_x && x < child_x + child_width {
+                            return Some((x, y, *widget));
+                        }
+                        child_x += child_width + SPACING;
                     }
                 }
                 None
@@ -324,13 +356,23 @@ impl<'a> UI<'a> {
                 let (width, height) = get_label_size(&self.font, self.scale, text);
                 (Some(width.max(40.0) + 2.0 * PADDING), Some(height + 2.0 * PADDING))
             }
-            Widget::Stack(Stack { ref children }) => {
+            Widget::Column(Column { ref children }) => {
                 let mut width: f32 = 0.0;
                 let mut height: f32 = 0.0;
                 for widget in children.iter() {
                     let (child_width, child_height) = self.get_widget_size(*widget);
                     if let Some(child_width) = child_width { width = width.max(child_width); }
-                    if let Some(child_height) = child_height { height += child_height; }
+                    if let Some(child_height) = child_height { height += child_height + SPACING; }
+                }
+                (Some(width), Some(height))
+            }
+            Widget::Row(Row { ref children }) => {
+                let mut width: f32 = 0.0;
+                let mut height: f32 = 0.0;
+                for widget in children.iter() {
+                    let (child_width, child_height) = self.get_widget_size(*widget);
+                    if let Some(child_width) = child_width { width += child_width + SPACING; }
+                    if let Some(child_height) = child_height { height = height.max(child_height); }
                 }
                 (Some(width), Some(height))
             }
