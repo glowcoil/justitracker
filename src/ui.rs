@@ -32,8 +32,20 @@ pub struct Column {
     children: Vec<WidgetID>,
 }
 
+impl Column {
+    pub fn get_child(&self, i: usize) -> WidgetID {
+        self.children[i]
+    }
+}
+
 pub struct Row {
     children: Vec<WidgetID>,
+}
+
+impl Row {
+    pub fn get_child(&self, i: usize) -> WidgetID {
+        self.children[i]
+    }
 }
 
 pub struct Button {
@@ -70,6 +82,20 @@ const PADDING: f32 = 8.0;
 const SPACING: f32 = 2.0;
 
 impl Widget {
+    pub fn as_column(&mut self) -> Option<&mut Column> {
+        match *self {
+            Widget::Column(ref mut column) => Some(column),
+            _ => None,
+        }
+    }
+
+    pub fn as_row(&mut self) -> Option<&mut Row> {
+        match *self {
+            Widget::Row(ref mut row) => Some(row),
+            _ => None,
+        }
+    }
+
     pub fn as_button(&mut self) -> Option<&mut Button> {
         match *self {
             Widget::Button(ref mut button) => Some(button),
@@ -250,7 +276,7 @@ impl<'a> UI<'a> {
                 let color = if self.mouse_holding.is_some() && self.mouse_holding.unwrap() == id {
                     [0.02, 0.2, 0.6, 1.0]
                 } else if offset_x < self.mouse_x && self.mouse_x < offset_x + width && offset_y < self.mouse_y && self.mouse_y < offset_y + height {
-                    [0.3, 0.45, 0.75, 1.0]
+                    [0.3, 0.4, 0.5, 1.0]
                 } else {
                     [0.15, 0.18, 0.23, 1.0]
                 };
@@ -322,7 +348,7 @@ impl<'a> UI<'a> {
                     let (_, child_height) = self.get_widget_size(*widget);
                     if let Some(child_height) = child_height {
                         if y >= child_y && y < child_y + child_height {
-                            return Some((x, y, *widget));
+                            return self.get_child_widget_at(*widget, x, y - child_y);
                         }
                         child_y += child_height + SPACING;
                     }
@@ -335,7 +361,7 @@ impl<'a> UI<'a> {
                     let (child_width, _) = self.get_widget_size(*widget);
                     if let Some(child_width) = child_width {
                         if x >= child_x && x < child_x + child_width {
-                            return Some((x, y, *widget));
+                            return self.get_child_widget_at(*widget, x - child_x, y);
                         }
                         child_x += child_width + SPACING;
                     }

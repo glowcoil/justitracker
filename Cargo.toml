@@ -10,3 +10,10 @@ crossbeam-channel = "*"
 rusttype = "0.2.1"
 unicode-normalization = "0.1"
 arrayvec = "0.4"
+hound = "3.3.1"
+libc = "*"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "*"
+cocoa = "*"
+core-foundation = "*"
