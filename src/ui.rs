@@ -1,3 +1,6 @@
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use glium::glutin;
 use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
@@ -5,7 +8,7 @@ use render::*;
 
 type WidgetID = usize;
 
-pub struct UI<'a> {
+pub struct UI {
     width: f32,
     height: f32,
     widgets: Vec<Widget>,
@@ -16,9 +19,31 @@ pub struct UI<'a> {
     mouse_holding: Option<WidgetID>,
     focus: Option<WidgetID>,
 
-    font: Font<'a>,
+    font: Font<'static>,
     scale: Scale,
 }
+
+// pub struct BoundingBox {
+//     pub w: Option<f32>,
+//     pub h: Option<f32>,
+// }
+
+// pub type WidgetRef = Rc<RefCell<Widget>>;
+
+// pub trait Widget {
+//     fn handle_event(&mut self, ev: glutin::Event);
+//     fn get_size(&self) -> BoundingBox;
+//     fn display(&self) -> DisplayList;
+// }
+
+// struct Empty;
+
+// impl Widget for Empty {
+//     fn handle_event(&mut self, ev: glutin::Event) {}
+//     fn get_size(&self) -> BoundingBox { BoundingBox { w: None, h: None } }
+//     fn display(&self) { DisplayList::new() }
+// }
+
 
 pub enum Widget {
     Empty,
@@ -111,8 +136,8 @@ impl Widget {
     }
 }
 
-impl<'a> UI<'a> {
-    pub fn new(width: f32, height: f32) -> UI<'a> {
+impl UI {
+    pub fn new(width: f32, height: f32) -> UI {
         let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
         let font = collection.into_font().unwrap();
 
@@ -255,7 +280,7 @@ impl<'a> UI<'a> {
         }
     }
 
-    pub fn display(&self) -> DisplayList<'a> {
+    pub fn display(&self) -> DisplayList {
         let mut list = DisplayList {
             rects: vec![],
             glyphs: vec![],
@@ -266,7 +291,7 @@ impl<'a> UI<'a> {
         list
     }
 
-    fn display_widget(&self, id: WidgetID, offset_x: f32, offset_y: f32, list: &mut DisplayList<'a>) {
+    fn display_widget(&self, id: WidgetID, offset_x: f32, offset_y: f32, list: &mut DisplayList) {
         match self.widgets[id] {
             Widget::Button(ref button) => {
                 let (width, height) = self.get_widget_size(id);

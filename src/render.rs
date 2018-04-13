@@ -9,9 +9,18 @@ use rusttype::gpu_cache::Cache;
 use glium;
 use glium::Surface;
 
-pub struct DisplayList<'a> {
+pub struct DisplayList {
     pub rects: Vec<Rect>,
-    pub glyphs: Vec<PositionedGlyph<'a>>,
+    pub glyphs: Vec<PositionedGlyph<'static>>,
+}
+
+impl DisplayList {
+    fn new() -> DisplayList {
+        DisplayList {
+            rects: vec![],
+            glyphs: vec![],
+        }
+    }
 }
 
 pub struct Rect {
