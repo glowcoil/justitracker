@@ -6,81 +6,339 @@ use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
-type WidgetID = usize;
-
 pub struct UI {
     width: f32,
     height: f32,
-    widgets: Vec<Widget>,
-    root: WidgetID,
+    root: WidgetRef,
 
+    input_state: InputState,
+}
+
+#[derive(Copy, Clone)]
+pub enum InputEvent {
+    CursorMoved { x: f32, y: f32 },
+    MousePress { button: MouseButton },
+    MouseRelease { button: MouseButton },
+    MouseScroll { delta: f32 },
+    KeyPress { button: KeyboardButton },
+    KeyRelease { button: KeyboardButton },
+    TextInput { character: char },
+}
+
+#[derive(Copy, Clone)]
+pub struct InputState {
     mouse_x: f32,
     mouse_y: f32,
-    mouse_holding: Option<WidgetID>,
-    focus: Option<WidgetID>,
-
-    font: Font<'static>,
-    scale: Scale,
+    mouse_left_pressed: bool,
+    mouse_middle_pressed: bool,
+    mouse_right_pressed: bool,
 }
 
-// pub struct BoundingBox {
-//     pub w: Option<f32>,
-//     pub h: Option<f32>,
-// }
+pub type WidgetRef = Rc<RefCell<Widget>>;
 
-// pub type WidgetRef = Rc<RefCell<Widget>>;
-
-// pub trait Widget {
-//     fn handle_event(&mut self, ev: glutin::Event);
-//     fn get_size(&self) -> BoundingBox;
-//     fn display(&self) -> DisplayList;
-// }
-
-// struct Empty;
-
-// impl Widget for Empty {
-//     fn handle_event(&mut self, ev: glutin::Event) {}
-//     fn get_size(&self) -> BoundingBox { BoundingBox { w: None, h: None } }
-//     fn display(&self) { DisplayList::new() }
-// }
-
-
-pub enum Widget {
-    Empty,
-    Column(Column),
-    Row(Row),
-    Button(Button),
-    Textbox(Textbox),
+pub trait Widget {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState);
+    fn set_container_size(&mut self, w: Option<f32>, h: Option<f32>);
+    fn get_size(&self) -> (f32, f32);
+    fn display(&self, input_state: InputState) -> DisplayList;
 }
+
+
+impl UI {
+    pub fn new(width: f32, height: f32) -> UI {
+        UI {
+            width: width,
+            height: height,
+            root: Empty::new(),
+
+            input_state: InputState {
+                mouse_x: -1.0,
+                mouse_y: -1.0,
+                mouse_left_pressed: false,
+                mouse_middle_pressed: false,
+                mouse_right_pressed: false,
+            },
+        }
+    }
+
+    pub fn get_size(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
+
+    pub fn set_size(&mut self, width: f32, height: f32) {
+        self.width = width;
+        self.height = height;
+        self.root.borrow_mut().set_container_size(Some(self.width), Some(self.height));
+    }
+
+    pub fn make_root(&mut self, root: WidgetRef) {
+        self.root = root;
+        self.root.borrow_mut().set_container_size(Some(self.width), Some(self.height));
+    }
+
+    pub fn handle_event(&mut self, ev: InputEvent) {
+        match ev {
+            InputEvent::CursorMoved { x, y } => {
+                self.input_state.mouse_x = x;
+                self.input_state.mouse_y = y;
+            }
+            InputEvent::MousePress { button } => {
+                match button {
+                    MouseButton::Left => {
+                        self.input_state.mouse_left_pressed = true;
+                    }
+                    MouseButton::Middle => {
+                        self.input_state.mouse_middle_pressed = true;
+                    }
+                    MouseButton::Right => {
+                        self.input_state.mouse_right_pressed = true;
+                    }
+                }
+            }
+            InputEvent::MouseRelease { button } => {
+                match button {
+                    MouseButton::Left => {
+                        self.input_state.mouse_left_pressed = false;
+                    }
+                    MouseButton::Middle => {
+                        self.input_state.mouse_middle_pressed = false;
+                    }
+                    MouseButton::Right => {
+                        self.input_state.mouse_right_pressed = false;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self.root.borrow_mut().handle_event(ev, self.input_state);
+    }
+
+    pub fn display(&self) -> DisplayList {
+        self.root.borrow().display(self.input_state)
+    }
+}
+
+
+pub struct Empty;
+
+impl Empty {
+    pub fn new() -> Rc<RefCell<Empty>> {
+        Rc::new(RefCell::new(Empty))
+    }
+}
+
+impl Widget for Empty {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {}
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {}
+    fn get_size(&self) -> (f32, f32) { (0.0, 0.0) }
+    fn display(&self, input_state: InputState) -> DisplayList { DisplayList::new() }
+}
+
+
+pub struct Container {
+    child: WidgetRef,
+}
+
+impl Container {
+    pub fn new(child: WidgetRef) -> Rc<RefCell<Container>> {
+        Rc::new(RefCell::new(Container { child: child }))
+    }
+}
+
+impl Widget for Container {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        self.child.borrow_mut().handle_event(ev, input_state);
+    }
+
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+        self.child.borrow_mut().set_container_size(width, height);
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        self.child.borrow().get_size()
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        self.child.borrow().display(input_state)
+    }
+}
+
 
 pub struct Column {
-    children: Vec<WidgetID>,
+    children: Vec<WidgetRef>,
+    focus: Option<usize>,
 }
 
 impl Column {
-    pub fn get_child(&self, i: usize) -> WidgetID {
-        self.children[i]
+    pub fn new(children: Vec<WidgetRef>) -> Rc<RefCell<Column>> {
+        Rc::new(RefCell::new(Column { children: children, focus: None }))
+    }
+
+    pub fn get_child(&self, i: usize) -> WidgetRef {
+        self.children[i].clone()
     }
 }
 
+impl Widget for Column {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        match ev {
+            InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
+                let mut y = 0.0;
+                for (i, child) in self.children.iter().enumerate() {
+                    let (child_width, child_height) = child.borrow().get_size();
+                    if 0.0 <= input_state.mouse_x && input_state.mouse_x < child_width && y <= input_state.mouse_y && input_state.mouse_y < y + child_height {
+                        if let InputEvent::MousePress { .. } = ev {
+                            self.focus = Some(i);
+                        }
+                        let mut input_state = input_state;
+                        input_state.mouse_y -= y;
+                        child.borrow_mut().handle_event(ev, input_state);
+                        break;
+                    } else {
+                        y += child_height;
+                    }
+                }
+            }
+            InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
+                if let Some(focus) = self.focus {
+                    let y: f32 = self.children[0..focus].iter().map(|child| child.borrow().get_size().1).sum();
+                    let mut input_state = input_state;
+                    input_state.mouse_y -= y;
+                    self.children[focus].borrow_mut().handle_event(ev, input_state);
+                }
+            }
+        }
+        println!("{:?}", self.focus);
+    }
+
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_size();
+            width = width.max(child_width);
+            height += child_height;
+        }
+        (width, height)
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        let mut list = DisplayList::new();
+
+        let mut y = 0.0;
+        for child in self.children.iter() {
+            let (_child_width, child_height) = child.borrow().get_size();
+            let mut input_state = input_state;
+            input_state.mouse_y -= y;
+            let mut child_list = child.borrow().display(input_state);
+            child_list.translate(0.0, y);
+            list.merge(child_list);
+            y += child_height;
+        }
+
+        list
+    }
+}
+
+
 pub struct Row {
-    children: Vec<WidgetID>,
+    children: Vec<WidgetRef>,
+    focus: Option<usize>,
 }
 
 impl Row {
-    pub fn get_child(&self, i: usize) -> WidgetID {
-        self.children[i]
+    pub fn new(children: Vec<WidgetRef>) -> Rc<RefCell<Row>> {
+        Rc::new(RefCell::new(Row { children: children, focus: None }))
+    }
+
+    pub fn get_child(&self, i: usize) -> WidgetRef {
+        self.children[i].clone()
     }
 }
 
+impl Widget for Row {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        match ev {
+            InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
+                let mut x = 0.0;
+                for (i, child) in self.children.iter().enumerate() {
+                    let (child_width, child_height) = child.borrow().get_size();
+                    if x <= input_state.mouse_x && input_state.mouse_x < x + child_width && 0.0 <= input_state.mouse_y && input_state.mouse_y < child_height {
+                        if let InputEvent::MousePress { .. } = ev {
+                            self.focus = Some(i);
+                        }
+                        let mut input_state = input_state;
+                        input_state.mouse_x -= x;
+                        child.borrow_mut().handle_event(ev, input_state);
+                        break;
+                    } else {
+                        x += child_width;
+                    }
+                }
+            },
+            InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
+                if let Some(focus) = self.focus {
+                    let x: f32 = self.children[0..focus].iter().map(|child| child.borrow().get_size().0).sum();
+                    let mut input_state = input_state;
+                    input_state.mouse_x -= x;
+                    self.children[focus].borrow_mut().handle_event(ev, input_state);
+                }
+            },
+        }
+    }
+
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_size();
+            width += child_width;
+            height = height.max(child_height);
+        }
+        (width, height)
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        let mut list = DisplayList::new();
+
+        let mut x = 0.0;
+        for child in self.children.iter() {
+            let (child_width, _child_height) = child.borrow().get_size();
+            let mut input_state = input_state;
+            input_state.mouse_x -= x;
+            let mut child_list = child.borrow().display(input_state);
+            child_list.translate(x, 0.0);
+            list.merge(child_list);
+            x += child_width;
+        }
+
+        list
+    }
+}
+
+
 pub struct Button {
-    text: &'static str,
+    contents: WidgetRef,
     on_press: Option<Box<Fn()>>,
+    pressed: bool,
 }
 
 impl Button {
-    pub fn new(text: &'static str) -> Button {
-        Button { text: text, on_press: None }
+    pub fn new(contents: WidgetRef) -> Rc<RefCell<Button>> {
+        Rc::new(RefCell::new(Button { contents: contents, on_press: None, pressed: false }))
+    }
+
+    pub fn with_text(text: &'static str, font: Rc<Font<'static>>) -> Rc<RefCell<Button>> {
+        Button::new(Label::new(text, font))
     }
 
     pub fn on_press<F>(&mut self, callback: F) where F: 'static + Fn() {
@@ -88,14 +346,107 @@ impl Button {
     }
 }
 
+impl Widget for Button {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        match ev {
+            InputEvent::CursorMoved { .. } => {
+                if self.pressed && !input_state.mouse_left_pressed {
+                    self.pressed = false;
+                }
+            }
+            InputEvent::MousePress { button: MouseButton::Left } => {
+                self.pressed = true;
+            }
+            InputEvent::MouseRelease { button: MouseButton::Left } => {
+                if self.pressed {
+                    if let Some(ref on_press) = self.on_press {
+                        on_press();
+                    }
+                    self.pressed = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        self.contents.borrow().get_size()
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        let (width, height) = self.get_size();
+
+        let color = if 0.0 <= input_state.mouse_x && input_state.mouse_x < width && 0.0 <= input_state.mouse_y && input_state.mouse_y < height {
+            if self.pressed {
+                [0.02, 0.2, 0.6, 1.0]
+            } else {
+                [0.3, 0.4, 0.5, 1.0]
+            }
+        } else {
+            [0.15, 0.18, 0.23, 1.0]
+        };
+
+        let mut list = DisplayList::new();
+        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: color });
+        list.merge(self.contents.borrow().display(input_state));
+
+        list
+    }
+}
+
+
+pub struct Label {
+    text: &'static str,
+    font: Rc<Font<'static>>,
+    scale: Scale,
+}
+
+impl Label {
+    pub fn new(text: &'static str, font: Rc<Font<'static>>) -> Rc<RefCell<Label>> {
+        Rc::new(RefCell::new(Label { text: text, font: font, scale: Scale::uniform(14.0) }))
+    }
+}
+
+impl Widget for Label {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+
+    }
+
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        get_label_size(&*self.font, self.scale, self.text)
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        let glyphs = layout_label(&*self.font, self.scale, 0.0, 0.0, self.text);
+
+        let mut list = DisplayList::new();
+        for glyph in glyphs.iter() {
+            list.glyph(glyph.standalone());
+        }
+
+        list
+    }
+}
+
+
 pub struct Textbox {
     text: String,
     on_change: Option<Box<Fn(&str)>>,
+    font: Rc<Font<'static>>,
+    scale: Scale,
 }
 
 impl Textbox {
-    pub fn new() -> Textbox {
-        Textbox { text: String::new(), on_change: None }
+    pub fn new(font: Rc<Font<'static>>) -> Rc<RefCell<Textbox>> {
+        Rc::new(RefCell::new(Textbox { text: String::new(), on_change: None, font: font, scale: Scale::uniform(14.0) }))
     }
 
     pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(&str) {
@@ -103,334 +454,55 @@ impl Textbox {
     }
 }
 
-const PADDING: f32 = 8.0;
-const SPACING: f32 = 2.0;
-
-impl Widget {
-    pub fn as_column(&mut self) -> Option<&mut Column> {
-        match *self {
-            Widget::Column(ref mut column) => Some(column),
-            _ => None,
-        }
-    }
-
-    pub fn as_row(&mut self) -> Option<&mut Row> {
-        match *self {
-            Widget::Row(ref mut row) => Some(row),
-            _ => None,
-        }
-    }
-
-    pub fn as_button(&mut self) -> Option<&mut Button> {
-        match *self {
-            Widget::Button(ref mut button) => Some(button),
-            _ => None,
-        }
-    }
-
-    pub fn as_textbox(&mut self) -> Option<&mut Textbox> {
-        match *self {
-            Widget::Textbox(ref mut textbox) => Some(textbox),
-            _ => None,
-        }
-    }
-}
-
-impl UI {
-    pub fn new(width: f32, height: f32) -> UI {
-        let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
-        let font = collection.into_font().unwrap();
-
-        UI {
-            width: width,
-            height: height,
-            widgets: vec![Widget::Empty],
-            root: 0,
-
-            mouse_x: 0.0,
-            mouse_y: 0.0,
-            mouse_holding: None,
-            focus: None,
-
-            font: font,
-            scale: Scale::uniform(14.0),
-        }
-    }
-
-    pub fn button(&mut self, text: &'static str) -> WidgetID {
-        self.add(Widget::Button(Button::new(text)))
-    }
-
-    pub fn textbox(&mut self) -> WidgetID {
-        self.add(Widget::Textbox(Textbox::new()))
-    }
-
-    pub fn column(&mut self, ids: Vec<WidgetID>) -> WidgetID {
-        self.add(Widget::Column(Column { children: ids }))
-    }
-
-    pub fn row(&mut self, ids: Vec<WidgetID>) -> WidgetID {
-        self.add(Widget::Row(Row { children: ids }))
-    }
-
-    fn add(&mut self, widget: Widget) -> WidgetID {
-        let id = self.widgets.len();
-        self.widgets.push(widget);
-        id
-    }
-
-    pub fn get(&self, id: WidgetID) -> &Widget {
-        &self.widgets[id]
-    }
-
-    pub fn get_mut(&mut self, id: WidgetID) -> &mut Widget {
-        &mut self.widgets[id]
-    }
-
-    pub fn make_root(&mut self, id: WidgetID) {
-        self.root = id;
-    }
-
-    pub fn focus(&mut self, id: WidgetID) {
-        self.focus = Some(id);
-    }
-
-    pub fn defocus(&mut self) {
-        self.focus = None;
-    }
-
-    pub fn handle_event(&mut self, ev: glutin::Event) {
+impl Widget for Textbox {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
-            glutin::Event::WindowEvent { event, .. } => match event {
-                glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
-                    self.mouse_x = x as f32;
-                    self.mouse_y = y as f32;
+            InputEvent::KeyPress { button: KeyboardButton::Back } => {
+                self.text.pop();
+                if let Some(ref on_change) = self.on_change {
+                    on_change(&self.text);
                 }
-                glutin::WindowEvent::MouseInput { device_id: _, state: mouse_state, button: _, modifiers: _ } => {
-                    match mouse_state {
-                        glutin::ElementState::Pressed => {
-                            if let Some((_widget_x, _widget_y, id)) = self.get_widget_at(self.mouse_x, self.mouse_y) {
-                                match self.widgets[id] {
-                                    Widget::Button { .. } | Widget::Textbox { .. } => {
-                                        self.mouse_holding = Some(id);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        },
-                        glutin::ElementState::Released => {
-                            if let Some(id) = self.mouse_holding {
-                                match self.widgets[id] {
-                                    Widget::Button { .. } => {
-                                        if let Some((_widget_x, _widget_y, hover_id)) = self.get_widget_at(self.mouse_x, self.mouse_y) {
-                                            if hover_id == id {
-                                                if let Some(ref on_press) = self.widgets[id].as_button().unwrap().on_press {
-                                                    on_press();
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Widget::Textbox { .. } => {
-                                        self.focus(id);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            self.mouse_holding = None;
-                        },
+            }
+            InputEvent::TextInput { character: c } => {
+                if !c.is_control() {
+                    self.text.push(c);
+                    if let Some(ref on_change) = self.on_change {
+                        on_change(&self.text);
                     }
                 }
-                glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
-                    if let Some(focus) = self.focus {
-                        match self.widgets[focus] {
-                            Widget::Textbox(Textbox { ref mut text, ref on_change }) => {
-                                if input.state == glutin::ElementState::Pressed {
-                                    if let Some(keycode) = input.virtual_keycode {
-                                        if keycode == glutin::VirtualKeyCode::Back {
-                                            text.pop();
-                                            if let Some(ref on_change) = *on_change {
-                                                on_change(text);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                glutin::WindowEvent::ReceivedCharacter(c) => {
-                    if let Some(focus) = self.focus {
-                        match self.widgets[focus] {
-                            Widget::Textbox(Textbox { ref mut text, ref on_change }) => {
-                                if !c.is_control() {
-                                    text.push(c);
-                                    if let Some(ref on_change) = *on_change {
-                                        on_change(text);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => (),
-            },
-            _ => (),
+            }
+            _ => {}
         }
     }
 
-    pub fn display(&self) -> DisplayList {
-        let mut list = DisplayList {
-            rects: vec![],
-            glyphs: vec![],
-        };
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
 
-        self.display_widget(self.root, 0.0, 0.0, &mut list);
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        get_label_size(&*self.font, self.scale, &self.text)
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        let color = [0.1, 0.15, 0.2, 1.0];
+
+        let (width, height) = self.get_size();
+        let glyphs = layout_label(&*self.font, self.scale, 0.0, 0.0, &self.text);
+
+        let mut list = DisplayList::new();
+
+        list.rect(Rect { x: 0.0, y: 0.0, w: width.max(40.0), h: height, color: color });
+        for glyph in glyphs.iter() {
+            list.glyph(glyph.standalone());
+        }
 
         list
     }
-
-    fn display_widget(&self, id: WidgetID, offset_x: f32, offset_y: f32, list: &mut DisplayList) {
-        match self.widgets[id] {
-            Widget::Button(ref button) => {
-                let (width, height) = self.get_widget_size(id);
-                let width = width.unwrap();
-                let height = height.unwrap();
-
-                let color = if self.mouse_holding.is_some() && self.mouse_holding.unwrap() == id {
-                    [0.02, 0.2, 0.6, 1.0]
-                } else if offset_x < self.mouse_x && self.mouse_x < offset_x + width && offset_y < self.mouse_y && self.mouse_y < offset_y + height {
-                    [0.3, 0.4, 0.5, 1.0]
-                } else {
-                    [0.15, 0.18, 0.23, 1.0]
-                };
-
-                let font = &self.font;
-                let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, button.text);
-
-                list.rects.push(Rect { x: offset_x, y: offset_y, w: width, h: height, color: color });
-                list.glyphs.append(&mut glyphs);
-            }
-            Widget::Textbox(Textbox { ref text, .. }) => {
-                let color = [0.1, 0.15, 0.2, 1.0];
-
-                let font = &self.font;
-                let (width, height) = get_label_size(font, self.scale, text);
-                let mut glyphs = layout_label(font, self.scale, offset_x + PADDING, offset_y + PADDING, text);
-
-                list.rects.push(Rect { x: offset_x, y: offset_y, w: width.max(40.0) + 2.0 * PADDING, h: height + 2.0 * PADDING, color: color });
-                list.glyphs.append(&mut glyphs);
-            }
-            Widget::Column(Column { ref children } ) => {
-                let mut offset_y = offset_y;
-                for widget in children.iter() {
-                    self.display_widget(*widget, offset_x, offset_y, list);
-                    let (_, child_height) = self.get_widget_size(*widget);
-                    if let Some(child_height) = child_height {
-                        offset_y += child_height + SPACING;
-                    }
-                }
-            }
-            Widget::Row(Row { ref children } ) => {
-                let mut offset_x = offset_x;
-                for widget in children.iter() {
-                    self.display_widget(*widget, offset_x, offset_y, list);
-                    let (child_width, _) = self.get_widget_size(*widget);
-                    if let Some(child_width) = child_width {
-                        offset_x += child_width + SPACING;
-                    }
-                }
-            }
-            Widget::Empty => {}
-        }
-    }
-
-    fn get_widget_at(&self, x: f32, y: f32) -> Option<(f32, f32, WidgetID)> {
-        let id = self.root;
-
-        let (width, height) = self.get_widget_size(id);
-        let width = width.unwrap_or(self.width);
-        let height = height.unwrap_or(self.height);
-        if x >= 0.0 && x < width && y >= 0.0 && y < height {
-            self.get_child_widget_at(id, x, y)
-        } else {
-            None
-        }
-    }
-
-    fn get_child_widget_at(&self, id: WidgetID, x: f32, y: f32) -> Option<(f32, f32, WidgetID)> {
-        match self.widgets[id] {
-            Widget::Button(..) => {
-                Some((x, y, id))
-            }
-            Widget::Textbox(..) => {
-                Some((x, y, id))
-            }
-            Widget::Column(Column { ref children }) => {
-                let mut child_y = 0.0;
-                for widget in children.iter() {
-                    let (_, child_height) = self.get_widget_size(*widget);
-                    if let Some(child_height) = child_height {
-                        if y >= child_y && y < child_y + child_height {
-                            return self.get_child_widget_at(*widget, x, y - child_y);
-                        }
-                        child_y += child_height + SPACING;
-                    }
-                }
-                None
-            }
-            Widget::Row(Row { ref children }) => {
-                let mut child_x = 0.0;
-                for widget in children.iter() {
-                    let (child_width, _) = self.get_widget_size(*widget);
-                    if let Some(child_width) = child_width {
-                        if x >= child_x && x < child_x + child_width {
-                            return self.get_child_widget_at(*widget, x - child_x, y);
-                        }
-                        child_x += child_width + SPACING;
-                    }
-                }
-                None
-            }
-            Widget::Empty => None
-        }
-    }
-
-    fn get_widget_size(&self, id: WidgetID) -> (Option<f32>, Option<f32>) {
-        match self.widgets[id] {
-            Widget::Button(ref button) => {
-                let (width, height) = get_label_size(&self.font, self.scale, button.text);
-                (Some(width + 2.0 * PADDING), Some(height + 2.0 * PADDING))
-            }
-            Widget::Textbox(Textbox { ref text, .. }) => {
-                let (width, height) = get_label_size(&self.font, self.scale, text);
-                (Some(width.max(40.0) + 2.0 * PADDING), Some(height + 2.0 * PADDING))
-            }
-            Widget::Column(Column { ref children }) => {
-                let mut width: f32 = 0.0;
-                let mut height: f32 = 0.0;
-                for widget in children.iter() {
-                    let (child_width, child_height) = self.get_widget_size(*widget);
-                    if let Some(child_width) = child_width { width = width.max(child_width); }
-                    if let Some(child_height) = child_height { height += child_height + SPACING; }
-                }
-                (Some(width), Some(height))
-            }
-            Widget::Row(Row { ref children }) => {
-                let mut width: f32 = 0.0;
-                let mut height: f32 = 0.0;
-                for widget in children.iter() {
-                    let (child_width, child_height) = self.get_widget_size(*widget);
-                    if let Some(child_width) = child_width { width += child_width + SPACING; }
-                    if let Some(child_height) = child_height { height = height.max(child_height); }
-                }
-                (Some(width), Some(height))
-            }
-            Widget::Empty => (None, None)
-        }
-    }
 }
+
+
+const PADDING: f32 = 8.0;
+const SPACING: f32 = 2.0;
 
 fn get_label_size<'a>(font: &'a Font,
                       scale: Scale,
@@ -532,4 +604,322 @@ fn layout_paragraph<'a>(font: &'a Font,
         result.push(glyph);
     }
     result
+}
+
+#[derive(Copy, Clone)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Copy, Clone)]
+pub enum KeyboardButton {
+    Key1,
+    Key2,
+    Key3,
+    Key4,
+    Key5,
+    Key6,
+    Key7,
+    Key8,
+    Key9,
+    Key0,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    Escape,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    Snapshot,
+    Scroll,
+    Pause,
+    Insert,
+    Home,
+    Delete,
+    End,
+    PageDown,
+    PageUp,
+    Left,
+    Up,
+    Right,
+    Down,
+    Back,
+    Return,
+    Space,
+    Compose,
+    Numlock,
+    Numpad0,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    AbntC1,
+    AbntC2,
+    Add,
+    Apostrophe,
+    Apps,
+    At,
+    Ax,
+    Backslash,
+    Calculator,
+    Capital,
+    Colon,
+    Comma,
+    Convert,
+    Decimal,
+    Divide,
+    Equals,
+    Grave,
+    Kana,
+    Kanji,
+    LAlt,
+    LBracket,
+    LControl,
+    LMenu,
+    LShift,
+    LWin,
+    Mail,
+    MediaSelect,
+    MediaStop,
+    Minus,
+    Multiply,
+    Mute,
+    MyComputer,
+    NavigateForward,
+    NavigateBackward,
+    NextTrack,
+    NoConvert,
+    NumpadComma,
+    NumpadEnter,
+    NumpadEquals,
+    OEM102,
+    Period,
+    PlayPause,
+    Power,
+    PrevTrack,
+    RAlt,
+    RBracket,
+    RControl,
+    RMenu,
+    RShift,
+    RWin,
+    Semicolon,
+    Slash,
+    Sleep,
+    Stop,
+    Subtract,
+    Sysrq,
+    Tab,
+    Underline,
+    Unlabeled,
+    VolumeDown,
+    VolumeUp,
+    Wake,
+    WebBack,
+    WebFavorites,
+    WebForward,
+    WebHome,
+    WebRefresh,
+    WebSearch,
+    WebStop,
+    Yen,
+}
+
+impl KeyboardButton {
+    pub fn from_glutin(keycode: glutin::VirtualKeyCode) -> KeyboardButton {
+        match keycode {
+            glutin::VirtualKeyCode::Key1 => KeyboardButton::Key1,
+            glutin::VirtualKeyCode::Key2 => KeyboardButton::Key2,
+            glutin::VirtualKeyCode::Key3 => KeyboardButton::Key3,
+            glutin::VirtualKeyCode::Key4 => KeyboardButton::Key4,
+            glutin::VirtualKeyCode::Key5 => KeyboardButton::Key5,
+            glutin::VirtualKeyCode::Key6 => KeyboardButton::Key6,
+            glutin::VirtualKeyCode::Key7 => KeyboardButton::Key7,
+            glutin::VirtualKeyCode::Key8 => KeyboardButton::Key8,
+            glutin::VirtualKeyCode::Key9 => KeyboardButton::Key9,
+            glutin::VirtualKeyCode::Key0 => KeyboardButton::Key0,
+            glutin::VirtualKeyCode::A => KeyboardButton::A,
+            glutin::VirtualKeyCode::B => KeyboardButton::B,
+            glutin::VirtualKeyCode::C => KeyboardButton::C,
+            glutin::VirtualKeyCode::D => KeyboardButton::D,
+            glutin::VirtualKeyCode::E => KeyboardButton::E,
+            glutin::VirtualKeyCode::F => KeyboardButton::F,
+            glutin::VirtualKeyCode::G => KeyboardButton::G,
+            glutin::VirtualKeyCode::H => KeyboardButton::H,
+            glutin::VirtualKeyCode::I => KeyboardButton::I,
+            glutin::VirtualKeyCode::J => KeyboardButton::J,
+            glutin::VirtualKeyCode::K => KeyboardButton::K,
+            glutin::VirtualKeyCode::L => KeyboardButton::L,
+            glutin::VirtualKeyCode::M => KeyboardButton::M,
+            glutin::VirtualKeyCode::N => KeyboardButton::N,
+            glutin::VirtualKeyCode::O => KeyboardButton::O,
+            glutin::VirtualKeyCode::P => KeyboardButton::P,
+            glutin::VirtualKeyCode::Q => KeyboardButton::Q,
+            glutin::VirtualKeyCode::R => KeyboardButton::R,
+            glutin::VirtualKeyCode::S => KeyboardButton::S,
+            glutin::VirtualKeyCode::T => KeyboardButton::T,
+            glutin::VirtualKeyCode::U => KeyboardButton::U,
+            glutin::VirtualKeyCode::V => KeyboardButton::V,
+            glutin::VirtualKeyCode::W => KeyboardButton::W,
+            glutin::VirtualKeyCode::X => KeyboardButton::X,
+            glutin::VirtualKeyCode::Y => KeyboardButton::Y,
+            glutin::VirtualKeyCode::Z => KeyboardButton::Z,
+            glutin::VirtualKeyCode::Escape => KeyboardButton::Escape,
+            glutin::VirtualKeyCode::F1 => KeyboardButton::F1,
+            glutin::VirtualKeyCode::F2 => KeyboardButton::F2,
+            glutin::VirtualKeyCode::F3 => KeyboardButton::F3,
+            glutin::VirtualKeyCode::F4 => KeyboardButton::F4,
+            glutin::VirtualKeyCode::F5 => KeyboardButton::F5,
+            glutin::VirtualKeyCode::F6 => KeyboardButton::F6,
+            glutin::VirtualKeyCode::F7 => KeyboardButton::F7,
+            glutin::VirtualKeyCode::F8 => KeyboardButton::F8,
+            glutin::VirtualKeyCode::F9 => KeyboardButton::F9,
+            glutin::VirtualKeyCode::F10 => KeyboardButton::F10,
+            glutin::VirtualKeyCode::F11 => KeyboardButton::F11,
+            glutin::VirtualKeyCode::F12 => KeyboardButton::F12,
+            glutin::VirtualKeyCode::F13 => KeyboardButton::F13,
+            glutin::VirtualKeyCode::F14 => KeyboardButton::F14,
+            glutin::VirtualKeyCode::F15 => KeyboardButton::F15,
+            glutin::VirtualKeyCode::Snapshot => KeyboardButton::Snapshot,
+            glutin::VirtualKeyCode::Scroll => KeyboardButton::Scroll,
+            glutin::VirtualKeyCode::Pause => KeyboardButton::Pause,
+            glutin::VirtualKeyCode::Insert => KeyboardButton::Insert,
+            glutin::VirtualKeyCode::Home => KeyboardButton::Home,
+            glutin::VirtualKeyCode::Delete => KeyboardButton::Delete,
+            glutin::VirtualKeyCode::End => KeyboardButton::End,
+            glutin::VirtualKeyCode::PageDown => KeyboardButton::PageDown,
+            glutin::VirtualKeyCode::PageUp => KeyboardButton::PageUp,
+            glutin::VirtualKeyCode::Left => KeyboardButton::Left,
+            glutin::VirtualKeyCode::Up => KeyboardButton::Up,
+            glutin::VirtualKeyCode::Right => KeyboardButton::Right,
+            glutin::VirtualKeyCode::Down => KeyboardButton::Down,
+            glutin::VirtualKeyCode::Back => KeyboardButton::Back,
+            glutin::VirtualKeyCode::Return => KeyboardButton::Return,
+            glutin::VirtualKeyCode::Space => KeyboardButton::Space,
+            glutin::VirtualKeyCode::Compose => KeyboardButton::Compose,
+            glutin::VirtualKeyCode::Numlock => KeyboardButton::Numlock,
+            glutin::VirtualKeyCode::Numpad0 => KeyboardButton::Numpad0,
+            glutin::VirtualKeyCode::Numpad1 => KeyboardButton::Numpad1,
+            glutin::VirtualKeyCode::Numpad2 => KeyboardButton::Numpad2,
+            glutin::VirtualKeyCode::Numpad3 => KeyboardButton::Numpad3,
+            glutin::VirtualKeyCode::Numpad4 => KeyboardButton::Numpad4,
+            glutin::VirtualKeyCode::Numpad5 => KeyboardButton::Numpad5,
+            glutin::VirtualKeyCode::Numpad6 => KeyboardButton::Numpad6,
+            glutin::VirtualKeyCode::Numpad7 => KeyboardButton::Numpad7,
+            glutin::VirtualKeyCode::Numpad8 => KeyboardButton::Numpad8,
+            glutin::VirtualKeyCode::Numpad9 => KeyboardButton::Numpad9,
+            glutin::VirtualKeyCode::AbntC1 => KeyboardButton::AbntC1,
+            glutin::VirtualKeyCode::AbntC2 => KeyboardButton::AbntC2,
+            glutin::VirtualKeyCode::Add => KeyboardButton::Add,
+            glutin::VirtualKeyCode::Apostrophe => KeyboardButton::Apostrophe,
+            glutin::VirtualKeyCode::Apps => KeyboardButton::Apps,
+            glutin::VirtualKeyCode::At => KeyboardButton::At,
+            glutin::VirtualKeyCode::Ax => KeyboardButton::Ax,
+            glutin::VirtualKeyCode::Backslash => KeyboardButton::Backslash,
+            glutin::VirtualKeyCode::Calculator => KeyboardButton::Calculator,
+            glutin::VirtualKeyCode::Capital => KeyboardButton::Capital,
+            glutin::VirtualKeyCode::Colon => KeyboardButton::Colon,
+            glutin::VirtualKeyCode::Comma => KeyboardButton::Comma,
+            glutin::VirtualKeyCode::Convert => KeyboardButton::Convert,
+            glutin::VirtualKeyCode::Decimal => KeyboardButton::Decimal,
+            glutin::VirtualKeyCode::Divide => KeyboardButton::Divide,
+            glutin::VirtualKeyCode::Equals => KeyboardButton::Equals,
+            glutin::VirtualKeyCode::Grave => KeyboardButton::Grave,
+            glutin::VirtualKeyCode::Kana => KeyboardButton::Kana,
+            glutin::VirtualKeyCode::Kanji => KeyboardButton::Kanji,
+            glutin::VirtualKeyCode::LAlt => KeyboardButton::LAlt,
+            glutin::VirtualKeyCode::LBracket => KeyboardButton::LBracket,
+            glutin::VirtualKeyCode::LControl => KeyboardButton::LControl,
+            glutin::VirtualKeyCode::LMenu => KeyboardButton::LMenu,
+            glutin::VirtualKeyCode::LShift => KeyboardButton::LShift,
+            glutin::VirtualKeyCode::LWin => KeyboardButton::LWin,
+            glutin::VirtualKeyCode::Mail => KeyboardButton::Mail,
+            glutin::VirtualKeyCode::MediaSelect => KeyboardButton::MediaSelect,
+            glutin::VirtualKeyCode::MediaStop => KeyboardButton::MediaStop,
+            glutin::VirtualKeyCode::Minus => KeyboardButton::Minus,
+            glutin::VirtualKeyCode::Multiply => KeyboardButton::Multiply,
+            glutin::VirtualKeyCode::Mute => KeyboardButton::Mute,
+            glutin::VirtualKeyCode::MyComputer => KeyboardButton::MyComputer,
+            glutin::VirtualKeyCode::NavigateForward => KeyboardButton::NavigateForward,
+            glutin::VirtualKeyCode::NavigateBackward => KeyboardButton::NavigateBackward,
+            glutin::VirtualKeyCode::NextTrack => KeyboardButton::NextTrack,
+            glutin::VirtualKeyCode::NoConvert => KeyboardButton::NoConvert,
+            glutin::VirtualKeyCode::NumpadComma => KeyboardButton::NumpadComma,
+            glutin::VirtualKeyCode::NumpadEnter => KeyboardButton::NumpadEnter,
+            glutin::VirtualKeyCode::NumpadEquals => KeyboardButton::NumpadEquals,
+            glutin::VirtualKeyCode::OEM102 => KeyboardButton::OEM102,
+            glutin::VirtualKeyCode::Period => KeyboardButton::Period,
+            glutin::VirtualKeyCode::PlayPause => KeyboardButton::PlayPause,
+            glutin::VirtualKeyCode::Power => KeyboardButton::Power,
+            glutin::VirtualKeyCode::PrevTrack => KeyboardButton::PrevTrack,
+            glutin::VirtualKeyCode::RAlt => KeyboardButton::RAlt,
+            glutin::VirtualKeyCode::RBracket => KeyboardButton::RBracket,
+            glutin::VirtualKeyCode::RControl => KeyboardButton::RControl,
+            glutin::VirtualKeyCode::RMenu => KeyboardButton::RMenu,
+            glutin::VirtualKeyCode::RShift => KeyboardButton::RShift,
+            glutin::VirtualKeyCode::RWin => KeyboardButton::RWin,
+            glutin::VirtualKeyCode::Semicolon => KeyboardButton::Semicolon,
+            glutin::VirtualKeyCode::Slash => KeyboardButton::Slash,
+            glutin::VirtualKeyCode::Sleep => KeyboardButton::Sleep,
+            glutin::VirtualKeyCode::Stop => KeyboardButton::Stop,
+            glutin::VirtualKeyCode::Subtract => KeyboardButton::Subtract,
+            glutin::VirtualKeyCode::Sysrq => KeyboardButton::Sysrq,
+            glutin::VirtualKeyCode::Tab => KeyboardButton::Tab,
+            glutin::VirtualKeyCode::Underline => KeyboardButton::Underline,
+            glutin::VirtualKeyCode::Unlabeled => KeyboardButton::Unlabeled,
+            glutin::VirtualKeyCode::VolumeDown => KeyboardButton::VolumeDown,
+            glutin::VirtualKeyCode::VolumeUp => KeyboardButton::VolumeUp,
+            glutin::VirtualKeyCode::Wake => KeyboardButton::Wake,
+            glutin::VirtualKeyCode::WebBack => KeyboardButton::WebBack,
+            glutin::VirtualKeyCode::WebFavorites => KeyboardButton::WebFavorites,
+            glutin::VirtualKeyCode::WebForward => KeyboardButton::WebForward,
+            glutin::VirtualKeyCode::WebHome => KeyboardButton::WebHome,
+            glutin::VirtualKeyCode::WebRefresh => KeyboardButton::WebRefresh,
+            glutin::VirtualKeyCode::WebSearch => KeyboardButton::WebSearch,
+            glutin::VirtualKeyCode::WebStop => KeyboardButton::WebStop,
+            glutin::VirtualKeyCode::Yen => KeyboardButton::Yen,
+        }
+    }
 }

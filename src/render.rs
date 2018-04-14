@@ -10,16 +10,42 @@ use glium;
 use glium::Surface;
 
 pub struct DisplayList {
-    pub rects: Vec<Rect>,
-    pub glyphs: Vec<PositionedGlyph<'static>>,
+    rects: Vec<Rect>,
+    glyphs: Vec<PositionedGlyph<'static>>,
 }
 
 impl DisplayList {
-    fn new() -> DisplayList {
+    pub fn new() -> DisplayList {
         DisplayList {
             rects: vec![],
             glyphs: vec![],
         }
+    }
+
+    pub fn merge(&mut self, other: DisplayList) {
+        self.rects.extend(other.rects);
+        self.glyphs.extend(other.glyphs);
+    }
+
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        for rect in self.rects.iter_mut() {
+            rect.x += dx;
+            rect.y += dy;
+        }
+
+        for glyph in self.glyphs.iter_mut() {
+            let old_glyph = glyph.clone();
+            let position = old_glyph.position();
+            *glyph = old_glyph.into_unpositioned().positioned(position + vector(dx, dy));
+        }
+    }
+
+    pub fn rect(&mut self, rect: Rect) {
+        self.rects.push(rect);
+    }
+
+    pub fn glyph(&mut self, glyph: PositionedGlyph<'static>) {
+        self.glyphs.push(glyph);
     }
 }
 
