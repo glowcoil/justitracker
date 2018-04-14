@@ -16,7 +16,7 @@ pub struct UI {
 
 #[derive(Copy, Clone)]
 pub enum InputEvent {
-    CursorMoved { x: f32, y: f32 },
+    CursorMoved { position: Point },
     MousePress { button: MouseButton },
     MouseRelease { button: MouseButton },
     MouseScroll { delta: f32 },
@@ -27,11 +27,22 @@ pub enum InputEvent {
 
 #[derive(Copy, Clone)]
 pub struct InputState {
-    mouse_x: f32,
-    mouse_y: f32,
+    mouse_position: Point,
+    mouse_drag_origin: Option<Point>,
     mouse_left_pressed: bool,
     mouse_middle_pressed: bool,
     mouse_right_pressed: bool,
+}
+
+impl InputState {
+    pub fn translate(self, delta: Point) -> InputState {
+        let mut input_state = self;
+        input_state.mouse_position = input_state.mouse_position + delta;
+        if let Some(ref mut mouse_drag_origin) = input_state.mouse_drag_origin {
+            *mouse_drag_origin = *mouse_drag_origin + delta;
+        }
+        input_state
+    }
 }
 
 pub type WidgetRef = Rc<RefCell<Widget>>;
@@ -52,8 +63,8 @@ impl UI {
             root: Empty::new(),
 
             input_state: InputState {
-                mouse_x: -1.0,
-                mouse_y: -1.0,
+                mouse_position: Point { x: -1.0, y: -1.0 },
+                mouse_drag_origin: None,
                 mouse_left_pressed: false,
                 mouse_middle_pressed: false,
                 mouse_right_pressed: false,
@@ -78,14 +89,14 @@ impl UI {
 
     pub fn handle_event(&mut self, ev: InputEvent) {
         match ev {
-            InputEvent::CursorMoved { x, y } => {
-                self.input_state.mouse_x = x;
-                self.input_state.mouse_y = y;
+            InputEvent::CursorMoved { position } => {
+                self.input_state.mouse_position = position;
             }
             InputEvent::MousePress { button } => {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = true;
+                        self.input_state.mouse_drag_origin = Some(self.input_state.mouse_position);
                     }
                     MouseButton::Middle => {
                         self.input_state.mouse_middle_pressed = true;
@@ -99,6 +110,7 @@ impl UI {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = false;
+                        self.input_state.mouse_drag_origin = None;
                     }
                     MouseButton::Middle => {
                         self.input_state.mouse_middle_pressed = false;
@@ -184,16 +196,16 @@ impl Widget for Column {
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
+                let mouse_position = input_state.mouse_drag_origin.unwrap_or(input_state.mouse_position);
+
                 let mut y = 0.0;
                 for (i, child) in self.children.iter().enumerate() {
                     let (child_width, child_height) = child.borrow().get_size();
-                    if 0.0 <= input_state.mouse_x && input_state.mouse_x < child_width && y <= input_state.mouse_y && input_state.mouse_y < y + child_height {
+                    if 0.0 <= mouse_position.x && mouse_position.x < child_width && y <= mouse_position.y && mouse_position.y < y + child_height {
                         if let InputEvent::MousePress { .. } = ev {
                             self.focus = Some(i);
                         }
-                        let mut input_state = input_state;
-                        input_state.mouse_y -= y;
-                        child.borrow_mut().handle_event(ev, input_state);
+                        child.borrow_mut().handle_event(ev, input_state.translate(Point { x: 0.0, y: -y }));
                         break;
                     } else {
                         y += child_height;
@@ -203,13 +215,10 @@ impl Widget for Column {
             InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
                 if let Some(focus) = self.focus {
                     let y: f32 = self.children[0..focus].iter().map(|child| child.borrow().get_size().1).sum();
-                    let mut input_state = input_state;
-                    input_state.mouse_y -= y;
-                    self.children[focus].borrow_mut().handle_event(ev, input_state);
+                    self.children[focus].borrow_mut().handle_event(ev, input_state.translate(Point { x: 0.0, y: -y }));
                 }
             }
         }
-        println!("{:?}", self.focus);
     }
 
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
@@ -233,9 +242,7 @@ impl Widget for Column {
         let mut y = 0.0;
         for child in self.children.iter() {
             let (_child_width, child_height) = child.borrow().get_size();
-            let mut input_state = input_state;
-            input_state.mouse_y -= y;
-            let mut child_list = child.borrow().display(input_state);
+            let mut child_list = child.borrow().display(input_state.translate(Point { x: 0.0, y: -y }));
             child_list.translate(0.0, y);
             list.merge(child_list);
             y += child_height;
@@ -265,16 +272,16 @@ impl Widget for Row {
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
+                let mouse_position = input_state.mouse_drag_origin.unwrap_or(input_state.mouse_position);
+
                 let mut x = 0.0;
                 for (i, child) in self.children.iter().enumerate() {
                     let (child_width, child_height) = child.borrow().get_size();
-                    if x <= input_state.mouse_x && input_state.mouse_x < x + child_width && 0.0 <= input_state.mouse_y && input_state.mouse_y < child_height {
+                    if x <= mouse_position.x && mouse_position.x < x + child_width && 0.0 <= mouse_position.y && mouse_position.y < child_height {
                         if let InputEvent::MousePress { .. } = ev {
                             self.focus = Some(i);
                         }
-                        let mut input_state = input_state;
-                        input_state.mouse_x -= x;
-                        child.borrow_mut().handle_event(ev, input_state);
+                        child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: 0.0 }));
                         break;
                     } else {
                         x += child_width;
@@ -284,9 +291,7 @@ impl Widget for Row {
             InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
                 if let Some(focus) = self.focus {
                     let x: f32 = self.children[0..focus].iter().map(|child| child.borrow().get_size().0).sum();
-                    let mut input_state = input_state;
-                    input_state.mouse_x -= x;
-                    self.children[focus].borrow_mut().handle_event(ev, input_state);
+                    self.children[focus].borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: 0.0 }));
                 }
             },
         }
@@ -313,9 +318,7 @@ impl Widget for Row {
         let mut x = 0.0;
         for child in self.children.iter() {
             let (child_width, _child_height) = child.borrow().get_size();
-            let mut input_state = input_state;
-            input_state.mouse_x -= x;
-            let mut child_list = child.borrow().display(input_state);
+            let mut child_list = child.borrow().display(input_state.translate(Point { x: -x, y: 0.0 }));
             child_list.translate(x, 0.0);
             list.merge(child_list);
             x += child_width;
@@ -329,12 +332,11 @@ impl Widget for Row {
 pub struct Button {
     contents: WidgetRef,
     on_press: Option<Box<Fn()>>,
-    pressed: bool,
 }
 
 impl Button {
     pub fn new(contents: WidgetRef) -> Rc<RefCell<Button>> {
-        Rc::new(RefCell::new(Button { contents: contents, on_press: None, pressed: false }))
+        Rc::new(RefCell::new(Button { contents: contents, on_press: None }))
     }
 
     pub fn with_text(text: &'static str, font: Rc<Font<'static>>) -> Rc<RefCell<Button>> {
@@ -349,20 +351,9 @@ impl Button {
 impl Widget for Button {
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
-            InputEvent::CursorMoved { .. } => {
-                if self.pressed && !input_state.mouse_left_pressed {
-                    self.pressed = false;
-                }
-            }
-            InputEvent::MousePress { button: MouseButton::Left } => {
-                self.pressed = true;
-            }
             InputEvent::MouseRelease { button: MouseButton::Left } => {
-                if self.pressed {
-                    if let Some(ref on_press) = self.on_press {
-                        on_press();
-                    }
-                    self.pressed = false;
+                if let Some(ref on_press) = self.on_press {
+                    on_press();
                 }
             }
             _ => {}
@@ -380,15 +371,15 @@ impl Widget for Button {
     fn display(&self, input_state: InputState) -> DisplayList {
         let (width, height) = self.get_size();
 
-        let color = if 0.0 <= input_state.mouse_x && input_state.mouse_x < width && 0.0 <= input_state.mouse_y && input_state.mouse_y < height {
-            if self.pressed {
-                [0.02, 0.2, 0.6, 1.0]
-            } else {
-                [0.3, 0.4, 0.5, 1.0]
+        let mut color = [0.15, 0.18, 0.23, 1.0];
+        if 0.0 <= input_state.mouse_position.x && input_state.mouse_position.x < width && 0.0 <= input_state.mouse_position.y && input_state.mouse_position.y < height {
+            color = [0.3, 0.4, 0.5, 1.0];
+        }
+        if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
+            if 0.0 <= mouse_drag_origin.x && mouse_drag_origin.x < width && 0.0 <= mouse_drag_origin.y && mouse_drag_origin.y < height {
+                color = [0.02, 0.2, 0.6, 1.0];
             }
-        } else {
-            [0.15, 0.18, 0.23, 1.0]
-        };
+        }
 
         let mut list = DisplayList::new();
         list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: color });
@@ -921,5 +912,38 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::WebStop => KeyboardButton::WebStop,
             glutin::VirtualKeyCode::Yen => KeyboardButton::Yen,
         }
+    }
+}
+
+use std::ops;
+
+#[derive(Copy, Clone)]
+pub struct Point { pub x: f32, pub y: f32 }
+
+impl ops::Add for Point {
+    type Output = Point;
+    fn add(self, rhs: Point) -> Point {
+        Point { x: self.x + rhs.x, y: self.y + rhs.y }
+    }
+}
+
+impl ops::Sub for Point {
+    type Output = Point;
+    fn sub(self, rhs: Point) -> Point {
+        Point { x: self.x - rhs.x, y: self.y - rhs.y }
+    }
+}
+
+impl ops::Mul<f32> for Point {
+    type Output = Point;
+    fn mul(self, rhs: f32) -> Point {
+        Point { x: self.x * rhs, y: self.y * rhs }
+    }
+}
+
+impl ops::Mul<Point> for f32 {
+    type Output = Point;
+    fn mul(self, rhs: Point) -> Point {
+        Point { x: self * rhs.x, y: self * rhs.y }
     }
 }

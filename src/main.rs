@@ -146,7 +146,7 @@ fn main() {
                     return glutin::ControlFlow::Break
                 }
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
-                    ui.handle_event(InputEvent::CursorMoved { x: x as f32, y: y as f32 });
+                    ui.handle_event(InputEvent::CursorMoved { position: Point { x: x as f32, y: y as f32 } });
                 }
                 glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers: _ } => {
                     let button = match button {
