@@ -50,6 +50,7 @@ pub type WidgetRef = Rc<RefCell<Widget>>;
 pub trait Widget {
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState);
     fn set_container_size(&mut self, w: Option<f32>, h: Option<f32>);
+    fn get_min_size(&self) -> (f32, f32);
     fn get_size(&self) -> (f32, f32);
     fn display(&self, input_state: InputState) -> DisplayList;
 }
@@ -70,6 +71,10 @@ impl UI {
                 mouse_right_pressed: false,
             },
         }
+    }
+
+    pub fn get_min_size(&self) -> (f32, f32) {
+        self.root.borrow().get_min_size()
     }
 
     pub fn get_size(&self) -> (f32, f32) {
@@ -143,6 +148,7 @@ impl Empty {
 impl Widget for Empty {
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {}
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {}
+    fn get_min_size(&self) -> (f32, f32) { (0.0, 0.0) }
     fn get_size(&self) -> (f32, f32) { (0.0, 0.0) }
     fn display(&self, input_state: InputState) -> DisplayList { DisplayList::new() }
 }
@@ -150,29 +156,69 @@ impl Widget for Empty {
 
 pub struct Container {
     child: WidgetRef,
+    style: ContainerStyle
 }
 
 impl Container {
     pub fn new(child: WidgetRef) -> Rc<RefCell<Container>> {
-        Rc::new(RefCell::new(Container { child: child }))
+        Rc::new(RefCell::new(Container { child: child, style: Default::default() }))
     }
 }
 
 impl Widget for Container {
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
-        self.child.borrow_mut().handle_event(ev, input_state);
+        self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
     }
 
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.child.borrow_mut().set_container_size(width, height);
+        self.child.borrow_mut().set_container_size(width.map(|width| width - 2.0 * self.style.padding), height.map(|height| height - 2.0 * self.style.padding));
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        let (width, height) = self.child.borrow().get_min_size();
+        (width + 2.0 * self.style.padding, height + 2.0 * self.style.padding)
     }
 
     fn get_size(&self) -> (f32, f32) {
-        self.child.borrow().get_size()
+        let (width, height) = self.child.borrow().get_size();
+        (width + 2.0 * self.style.padding, height + 2.0 * self.style.padding)
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        self.child.borrow().display(input_state)
+        let mut list = self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
+        list.translate(Point { x: self.style.padding, y: self.style.padding });
+        list
+    }
+}
+
+pub struct ContainerStyle {
+    padding: f32,
+    min_width: Option<f32>,
+    max_width: Option<f32>,
+    min_height: Option<f32>,
+    max_height: Option<f32>,
+    h_align: HAlign,
+    v_align: VAlign,
+    h_fill: bool,
+    v_fill: bool,
+}
+
+pub enum HAlign { Left, Center, Right }
+pub enum VAlign { Top, Center, Bottom }
+
+impl Default for ContainerStyle {
+    fn default() -> ContainerStyle {
+        ContainerStyle {
+            padding: 8.0,
+            min_width: None,
+            max_width: None,
+            min_height: None,
+            max_height: None,
+            h_align: HAlign::Left,
+            v_align: VAlign::Top,
+            h_fill: false,
+            v_fill: false,
+        }
     }
 }
 
@@ -225,6 +271,17 @@ impl Widget for Column {
 
     }
 
+    fn get_min_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_min_size();
+            width = width.max(child_width);
+            height += child_height;
+        }
+        (width, height)
+    }
+
     fn get_size(&self) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -243,7 +300,7 @@ impl Widget for Column {
         for child in self.children.iter() {
             let (_child_width, child_height) = child.borrow().get_size();
             let mut child_list = child.borrow().display(input_state.translate(Point { x: 0.0, y: -y }));
-            child_list.translate(0.0, y);
+            child_list.translate(Point { x: 0.0, y: y });
             list.merge(child_list);
             y += child_height;
         }
@@ -301,6 +358,17 @@ impl Widget for Row {
 
     }
 
+    fn get_min_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_min_size();
+            width += child_width;
+            height = height.max(child_height);
+        }
+        (width, height)
+    }
+
     fn get_size(&self) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -319,7 +387,7 @@ impl Widget for Row {
         for child in self.children.iter() {
             let (child_width, _child_height) = child.borrow().get_size();
             let mut child_list = child.borrow().display(input_state.translate(Point { x: -x, y: 0.0 }));
-            child_list.translate(x, 0.0);
+            child_list.translate(Point { x: x, y: 0.0 });
             list.merge(child_list);
             x += child_width;
         }
@@ -336,7 +404,7 @@ pub struct Button {
 
 impl Button {
     pub fn new(contents: WidgetRef) -> Rc<RefCell<Button>> {
-        Rc::new(RefCell::new(Button { contents: contents, on_press: None }))
+        Rc::new(RefCell::new(Button { contents: Container::new(contents), on_press: None }))
     }
 
     pub fn with_text(text: &'static str, font: Rc<Font<'static>>) -> Rc<RefCell<Button>> {
@@ -362,6 +430,10 @@ impl Widget for Button {
 
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
 
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        self.contents.borrow().get_min_size()
     }
 
     fn get_size(&self) -> (f32, f32) {
@@ -409,6 +481,10 @@ impl Widget for Label {
 
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
 
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        get_label_size(&*self.font, self.scale, self.text)
     }
 
     fn get_size(&self) -> (f32, f32) {
@@ -470,8 +546,13 @@ impl Widget for Textbox {
 
     }
 
+    fn get_min_size(&self) -> (f32, f32) {
+        self.get_size()
+    }
+
     fn get_size(&self) -> (f32, f32) {
-        get_label_size(&*self.font, self.scale, &self.text)
+        let (width, height) = get_label_size(&*self.font, self.scale, &self.text);
+        (width.max(40.0), height)
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
