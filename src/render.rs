@@ -9,6 +9,8 @@ use rusttype::gpu_cache::Cache;
 use glium;
 use glium::Surface;
 
+use ui::Point;
+
 pub struct DisplayList {
     rects: Vec<Rect>,
     glyphs: Vec<PositionedGlyph<'static>>,
@@ -27,16 +29,16 @@ impl DisplayList {
         self.glyphs.extend(other.glyphs);
     }
 
-    pub fn translate(&mut self, dx: f32, dy: f32) {
+    pub fn translate(&mut self, delta: Point) {
         for rect in self.rects.iter_mut() {
-            rect.x += dx;
-            rect.y += dy;
+            rect.x += delta.x;
+            rect.y += delta.y;
         }
 
         for glyph in self.glyphs.iter_mut() {
             let old_glyph = glyph.clone();
             let position = old_glyph.position();
-            *glyph = old_glyph.into_unpositioned().positioned(position + vector(dx, dy));
+            *glyph = old_glyph.into_unpositioned().positioned(position + vector(delta.x, delta.y));
         }
     }
 
