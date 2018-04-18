@@ -104,7 +104,7 @@ fn main() {
                 messages.borrow_mut().push_back(Message::LoadSample(i));
             }
         });
-        let mut track: Vec<WidgetRef> = vec![];
+        let mut track: Vec<WidgetRef> = vec![load_sample_button];
         for j in 0..8 {
             let textbox = Textbox::new(font.clone());
             textbox.borrow_mut().on_change({
@@ -129,8 +129,7 @@ fn main() {
             });
             track.push(textbox);
         }
-        let track_column = Column::new(track);
-        columns.push(Column::new(vec![load_sample_button, track_column]));
+        columns.push(Column::new(track));
     }
     let grid = Row::new(columns);
     root.push(grid);
