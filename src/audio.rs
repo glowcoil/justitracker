@@ -81,14 +81,16 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                                     note = (note + 1) % 8;
                                 }
 
-                                let pitch = song.notes[track][note] / 8.0;
-                                let phase: f32 = (t as f32 * pitch) % song.samples[track].len() as f32;
+                                if let Some(ref factors) = song.notes[track][note] {
+                                    let pitch = 2.0f32.powi(factors[0]) * 3.0f32.powi(factors[1]) * 5.0f32.powi(factors[2]) * 11.0f32.powi(factors[3]);
+                                    let phase: f32 = (t as f32 * pitch) % song.samples[track].len() as f32;
 
-                                let phase_whole = phase as usize;
-                                let phase_frac = phase - phase_whole as f32;
-                                let value = (1.0 - phase_frac) * song.samples[track][phase_whole] + phase_frac * song.samples[track][(phase_whole + 1) % song.samples[track].len()];
+                                    let phase_whole = phase as usize;
+                                    let phase_frac = phase - phase_whole as f32;
+                                    let value = (1.0 - phase_frac) * song.samples[track][phase_whole] + phase_frac * song.samples[track][(phase_whole + 1) % song.samples[track].len()];
 
-                                mix += value;
+                                    mix += value;
+                                }
                             }
                             if mix > 1.0 {
                                 mix = 1.0;

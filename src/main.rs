@@ -36,20 +36,20 @@ enum Message {
     Play,
     Stop,
     LoadSample(usize),
-    SetNote { track: usize, note: usize, pitch: f32 },
+    SetNote { track: usize, note: usize, factor: usize, power: i32 },
 }
 
 #[derive(Clone)]
 pub struct Song {
     samples: Vec<Vec<f32>>,
-    notes: Vec<Vec<f32>>,
+    notes: Vec<Vec<Option<Vec<i32>>>>,
 }
 
 impl Default for Song {
     fn default() -> Song {
         Song {
             samples: vec![vec![0.0; 1]; 8],
-            notes: vec![vec![0.0; 8]; 8],
+            notes: vec![vec![None; 8]; 8],
         }
     }
 }
@@ -106,28 +106,33 @@ fn main() {
         });
         let mut track: Vec<WidgetRef> = vec![load_sample_button];
         for j in 0..8 {
-            let textbox = Textbox::new(font.clone());
-            textbox.borrow_mut().on_change({
-                let messages = messages.clone();
-                move |text| {
-                    let fraction: Vec<&str> = text.split("/").collect();
-                    if fraction.len() > 0 {
-                        if let Ok(p) = fraction[0].parse::<f32>() {
-                            let q = if fraction.len() == 2 {
-                                if let Ok(q) = fraction[1].parse::<f32>() {
-                                    q
-                                } else {
-                                    return;
-                                }
-                            } else {
-                                1.0
-                            };
-                            messages.borrow_mut().push_back(Message::SetNote { track: i, note: j, pitch: p / q });
-                        }
+            let mut factors: Vec<WidgetRef> = vec![];
+            for k in 0..4 {
+                let factor = IntegerInput::new(0, font.clone());
+                factor.borrow_mut().on_change({
+                    let messages = messages.clone();
+                    move |n| {
+                        // let fraction: Vec<&str> = text.split("/").collect();
+                        // if fraction.len() > 0 {
+                        //     if let Ok(p) = fraction[0].parse::<f32>() {
+                        //         let q = if fraction.len() == 2 {
+                        //             if let Ok(q) = fraction[1].parse::<f32>() {
+                        //                 q
+                        //             } else {
+                        //                 return;
+                        //             }
+                        //         } else {
+                        //             1.0
+                        //         };
+                        //         messages.borrow_mut().push_back(Message::SetNote { track: i, note: j, pitch: p / q });
+                        //     }
+                        // }
+                        messages.borrow_mut().push_back(Message::SetNote { track: i, note: j, factor: k, power: n });
                     }
-                }
-            });
-            track.push(textbox);
+                });
+                factors.push(factor);
+            }
+            track.push(Row::new(factors));
         }
         columns.push(Column::new(track));
     }
@@ -203,8 +208,14 @@ fn main() {
                         audio_send.send(AudioMessage::Song(song.clone())).unwrap();
                     }
                 }
-                Message::SetNote { track, note, pitch } => {
-                    song.notes[track][note] = pitch;
+                Message::SetNote { track, note, factor, power } => {
+                    if song.notes[track][note].is_none() {
+                        song.notes[track][note] = Some(vec![0, 0, 0, 0]);
+                    }
+                    match song.notes[track][note].as_mut() {
+                        Some(note) => { note[factor] = power; }
+                        None => {}
+                    }
                     audio_send.send(AudioMessage::Song(song.clone())).unwrap();
                 }
             }

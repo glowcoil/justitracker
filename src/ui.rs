@@ -48,10 +48,10 @@ impl InputState {
 pub type WidgetRef = Rc<RefCell<Widget>>;
 
 pub trait Widget {
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState);
     fn set_container_size(&mut self, w: Option<f32>, h: Option<f32>);
     fn get_min_size(&self) -> (f32, f32);
     fn get_size(&self) -> (f32, f32);
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState);
     fn display(&self, input_state: InputState) -> DisplayList;
 }
 
@@ -115,7 +115,6 @@ impl UI {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = false;
-                        self.input_state.mouse_drag_origin = None;
                     }
                     MouseButton::Middle => {
                         self.input_state.mouse_middle_pressed = false;
@@ -129,6 +128,13 @@ impl UI {
         }
 
         self.root.borrow_mut().handle_event(ev, self.input_state);
+
+        match ev {
+            InputEvent::MouseRelease { button: MouseButton::Left } => {
+                self.input_state.mouse_drag_origin = None;
+            }
+            _ => {}
+        }
     }
 
     pub fn display(&self) -> DisplayList {
@@ -146,47 +152,106 @@ impl Empty {
 }
 
 impl Widget for Empty {
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {}
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {}
     fn get_min_size(&self) -> (f32, f32) { (0.0, 0.0) }
     fn get_size(&self) -> (f32, f32) { (0.0, 0.0) }
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {}
     fn display(&self, input_state: InputState) -> DisplayList { DisplayList::new() }
 }
 
 
 pub struct Container {
     child: WidgetRef,
-    style: ContainerStyle
+    style: ContainerStyle,
+    container_width: Option<f32>,
+    container_height: Option<f32>,
 }
 
 impl Container {
     pub fn new(child: WidgetRef) -> Rc<RefCell<Container>> {
-        Rc::new(RefCell::new(Container { child: child, style: Default::default() }))
+        Rc::new(RefCell::new(Container { child: child, style: Default::default(), container_width: None, container_height: None }))
+    }
+
+    pub fn get_style(&mut self) -> &mut ContainerStyle {
+        &mut self.style
+    }
+
+    fn get_max_size(&self) -> (Option<f32>, Option<f32>) {
+        let max_width = self.container_width
+            .and_then(|container_width| self.style.max_width.and_then(|max_width| Some(container_width.min(max_width))))
+            .or(self.container_width).or(self.style.max_width);
+        let max_height = self.container_height
+            .and_then(|container_height| self.style.max_height.and_then(|max_height| Some(container_height.min(max_height))))
+            .or(self.container_height).or(self.style.max_height);
+        (max_width, max_height)
+    }
+
+    fn get_size_from_child_size(&self, child_width: f32, child_height: f32) -> (f32, f32) {
+        let (max_width, max_height) = self.get_max_size();
+        let width = if max_width.is_some() && self.style.h_fill {
+            max_width.unwrap()
+        } else {
+            let contents_width = child_width + 2.0 * self.style.padding;
+            self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width))
+        };
+        let height = if max_height.is_some() && self.style.v_fill {
+            max_height.unwrap()
+        } else {
+            let contents_height = child_height + 2.0 * self.style.padding;
+            self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height))
+        };
+        (width, height)
+    }
+
+    fn get_child_offset(&self, child_width: f32, child_height: f32) -> (f32, f32) {
+        let (width, height) = self.get_size_from_child_size(child_width, child_height);
+        let x = match self.style.h_align {
+            HAlign::Left => self.style.padding,
+            HAlign::Center => width / 2.0 - child_width / 2.0,
+            HAlign::Right => width - self.style.padding - child_width,
+        };
+        let y = match self.style.v_align {
+            VAlign::Top => self.style.padding,
+            VAlign::Center => height / 2.0 - child_height / 2.0,
+            VAlign::Bottom => height - self.style.padding - child_height,
+        };
+        (x, y)
     }
 }
 
 impl Widget for Container {
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
-        self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
-    }
-
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.child.borrow_mut().set_container_size(width.map(|width| width - 2.0 * self.style.padding), height.map(|height| height - 2.0 * self.style.padding));
+        self.container_width = width;
+        self.container_height = height;
+        let (max_width, max_height) = self.get_max_size();
+        self.child.borrow_mut().set_container_size(max_width.map(|max_width| max_width - 2.0 * self.style.padding), max_height.map(|max_height| max_height - 2.0 * self.style.padding));
     }
 
     fn get_min_size(&self) -> (f32, f32) {
-        let (width, height) = self.child.borrow().get_min_size();
-        (width + 2.0 * self.style.padding, height + 2.0 * self.style.padding)
+        let (child_width, child_height) = self.child.borrow().get_min_size();
+        let contents_width = child_width + 2.0 * self.style.padding;
+        let contents_height = child_height + 2.0 * self.style.padding;
+        let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
+        let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
+        (min_width, min_height)
     }
 
     fn get_size(&self) -> (f32, f32) {
-        let (width, height) = self.child.borrow().get_size();
-        (width + 2.0 * self.style.padding, height + 2.0 * self.style.padding)
+        let (child_width, child_height) = self.child.borrow().get_size();
+        self.get_size_from_child_size(child_width, child_height)
+    }
+
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        let (child_width, child_height) = self.child.borrow().get_size();
+        let (x, y) = self.get_child_offset(child_width, child_height);
+        self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
+        let (child_width, child_height) = self.child.borrow().get_size();
+        let (x, y) = self.get_child_offset(child_width, child_height);
         let mut list = self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
-        list.translate(Point { x: self.style.padding, y: self.style.padding });
+        list.translate(Point { x: x, y: y });
         list
     }
 }
@@ -239,6 +304,32 @@ impl Column {
 }
 
 impl Widget for Column {
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_min_size();
+            width = width.max(child_width);
+            height += child_height;
+        }
+        (width, height)
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_size();
+            width = width.max(child_width);
+            height += child_height;
+        }
+        (width, height)
+    }
+
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
@@ -265,32 +356,6 @@ impl Widget for Column {
                 }
             }
         }
-    }
-
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_min_size();
-            width = width.max(child_width);
-            height += child_height;
-        }
-        (width, height)
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_size();
-            width = width.max(child_width);
-            height += child_height;
-        }
-        (width, height)
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -326,6 +391,32 @@ impl Row {
 }
 
 impl Widget for Row {
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_min_size();
+            width += child_width;
+            height = height.max(child_height);
+        }
+        (width, height)
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in self.children.iter() {
+            let (child_width, child_height) = child.borrow().get_size();
+            width += child_width;
+            height = height.max(child_height);
+        }
+        (width, height)
+    }
+
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
@@ -352,32 +443,6 @@ impl Widget for Row {
                 }
             },
         }
-    }
-
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_min_size();
-            width += child_width;
-            height = height.max(child_height);
-        }
-        (width, height)
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_size();
-            width += child_width;
-            height = height.max(child_height);
-        }
-        (width, height)
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -417,17 +482,6 @@ impl Button {
 }
 
 impl Widget for Button {
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
-        match ev {
-            InputEvent::MouseRelease { button: MouseButton::Left } => {
-                if let Some(ref on_press) = self.on_press {
-                    on_press();
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
 
     }
@@ -440,18 +494,32 @@ impl Widget for Button {
         self.contents.borrow().get_size()
     }
 
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        match ev {
+            InputEvent::MouseRelease { button: MouseButton::Left } => {
+                let (width, height) = self.get_size();
+                if 0.0 < input_state.mouse_position.x && input_state.mouse_position.x < width && 0.0 < input_state.mouse_position.y && input_state.mouse_position.y < height {
+                    if let Some(ref on_press) = self.on_press {
+                        on_press();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn display(&self, input_state: InputState) -> DisplayList {
         let (width, height) = self.get_size();
 
         let mut color = [0.15, 0.18, 0.23, 1.0];
-        if 0.0 <= input_state.mouse_position.x && input_state.mouse_position.x < width && 0.0 <= input_state.mouse_position.y && input_state.mouse_position.y < height {
-            color = [0.3, 0.4, 0.5, 1.0];
-        }
         if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
             if 0.0 <= mouse_drag_origin.x && mouse_drag_origin.x < width && 0.0 <= mouse_drag_origin.y && mouse_drag_origin.y < height {
                 color = [0.02, 0.2, 0.6, 1.0];
             }
+        } else if 0.0 <= input_state.mouse_position.x && input_state.mouse_position.x < width && 0.0 <= input_state.mouse_position.y && input_state.mouse_position.y < height {
+            color = [0.3, 0.4, 0.5, 1.0];
         }
+
 
         let mut list = DisplayList::new();
         list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: color });
@@ -463,36 +531,41 @@ impl Widget for Button {
 
 
 pub struct Label {
-    text: &'static str,
+    text: String,
     font: Rc<Font<'static>>,
     scale: Scale,
 }
 
 impl Label {
-    pub fn new(text: &'static str, font: Rc<Font<'static>>) -> Rc<RefCell<Label>> {
-        Rc::new(RefCell::new(Label { text: text, font: font, scale: Scale::uniform(14.0) }))
+    pub fn new(text: &str, font: Rc<Font<'static>>) -> Rc<RefCell<Label>> {
+        Rc::new(RefCell::new(Label { text: text.to_string(), font: font, scale: Scale::uniform(14.0) }))
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
     }
 }
 
 impl Widget for Label {
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
-
-    }
-
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
 
     }
 
     fn get_min_size(&self) -> (f32, f32) {
-        get_label_size(&*self.font, self.scale, self.text)
+        get_label_size(&*self.font, self.scale, &self.text)
     }
 
     fn get_size(&self) -> (f32, f32) {
-        get_label_size(&*self.font, self.scale, self.text)
+        get_label_size(&*self.font, self.scale, &self.text)
+    }
+
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        let glyphs = layout_label(&*self.font, self.scale, 0.0, 0.0, self.text);
+        let glyphs = layout_label(&*self.font, self.scale, 0.0, 0.0, &self.text);
 
         let mut list = DisplayList::new();
         for glyph in glyphs.iter() {
@@ -522,6 +595,19 @@ impl Textbox {
 }
 
 impl Widget for Textbox {
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        self.get_size()
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        let (width, height) = get_label_size(&*self.font, self.scale, &self.text);
+        (width.max(40.0), height)
+    }
+
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
         match ev {
             InputEvent::KeyPress { button: KeyboardButton::Back } => {
@@ -542,19 +628,6 @@ impl Widget for Textbox {
         }
     }
 
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        self.get_size()
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        let (width, height) = get_label_size(&*self.font, self.scale, &self.text);
-        (width.max(40.0), height)
-    }
-
     fn display(&self, input_state: InputState) -> DisplayList {
         let color = [0.1, 0.15, 0.2, 1.0];
 
@@ -569,6 +642,69 @@ impl Widget for Textbox {
         }
 
         list
+    }
+}
+
+
+pub struct IntegerInput {
+    value: i32,
+    new_value: Option<i32>,
+    on_change: Option<Box<Fn(i32)>>,
+    container: Rc<RefCell<Container>>,
+    label: Rc<RefCell<Label>>,
+}
+
+impl IntegerInput {
+    pub fn new(value: i32, font: Rc<Font<'static>>) -> Rc<RefCell<IntegerInput>> {
+        let label = Label::new(&value.to_string(), font);
+        let container = Container::new(label.clone());
+        container.borrow_mut().get_style().padding = 2.0;
+        Rc::new(RefCell::new(IntegerInput { value: value, new_value: None, on_change: None, container: container, label: label }))
+    }
+
+    pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(i32) {
+        self.on_change = Some(Box::new(callback));
+    }
+}
+
+impl Widget for IntegerInput {
+    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+        self.container.borrow_mut().set_container_size(width, height);
+    }
+
+    fn get_min_size(&self) -> (f32, f32) {
+        self.container.borrow().get_min_size()
+    }
+
+    fn get_size(&self) -> (f32, f32) {
+        self.container.borrow().get_size()
+    }
+
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+        match ev {
+            InputEvent::CursorMoved { position } => {
+                if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
+                    let dy = -(input_state.mouse_position.y - mouse_drag_origin.y);
+                    let new_value = self.value + (dy / 8.0) as i32;
+                    self.new_value = Some(new_value);
+                    self.label.borrow_mut().set_text(&new_value.to_string());
+                    if let Some(ref on_change) = self.on_change {
+                        on_change(new_value);
+                    }
+                }
+            }
+            InputEvent::MouseRelease { button: MouseButton::Left } => {
+                if let Some(new_value) = self.new_value {
+                    self.value = new_value;
+                    self.new_value = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn display(&self, input_state: InputState) -> DisplayList {
+        self.container.borrow().display(input_state)
     }
 }
 
