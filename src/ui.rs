@@ -321,26 +321,35 @@ impl Row {
 
     fn get_widths_from_child_widths(&self, child_widths: &Vec<f32>, max_width: Option<f32>) -> Vec<f32> {
         let mut container_widths: Vec<f32> = child_widths.clone();
-        let children_width: f32 = container_widths.iter().sum();
-        if let Some(max_width) = max_width {
-            let extra_space = max_width - children_width - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
-            match self.style.h_fill {
-                Grow::None => {}
-                Grow::Equal => {
-                    let count = self.children.len() as f32;
-                    for child_width in container_widths.iter_mut() {
-                        *child_width += extra_space / count;
-                    }
+        let children_width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let width = self.get_width_from_children_width(children_width, max_width);
+        let extra_space = width - children_width - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
+        match self.style.h_fill {
+            Grow::None => {}
+            Grow::Equal => {
+                let count = self.children.len() as f32;
+                for child_width in container_widths.iter_mut() {
+                    *child_width += extra_space / count;
                 }
-                Grow::Ratio(ref amounts) => {
-                    let total: f32 = amounts.iter().sum();
-                    for (i, child_width) in container_widths.iter_mut().enumerate() {
-                        *child_width += (amounts[i] / total) * extra_space;
-                    }
+            }
+            Grow::Ratio(ref amounts) => {
+                let total: f32 = amounts.iter().sum();
+                for (i, child_width) in container_widths.iter_mut().enumerate() {
+                    *child_width += (amounts[i] / total) * extra_space;
                 }
             }
         }
         container_widths
+    }
+
+    fn get_width_from_children_width(&self, children_width: f32, max_width: Option<f32>) -> f32 {
+        let width = if max_width.is_some() && self.style.h_fill != Grow::None {
+            max_width.unwrap()
+        } else {
+            let contents_width = children_width + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+            self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width))
+        };
+        width
     }
 
     fn get_height_from_child_heights(&self, child_heights: &Vec<f32>, max_height: Option<f32>) -> f32 {
@@ -419,15 +428,20 @@ impl Widget for Row {
             width += child_width + self.style.spacing;
             height = height.max(child_height);
         }
-        (width + 2.0 * self.style.padding, height + 2.0 * self.style.padding)
+        let contents_width = width + 2.0 * self.style.padding;
+        let contents_height = height + 2.0 * self.style.padding;
+        let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
+        let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
+        (min_width, min_height)
     }
 
     fn get_size(&self) -> (f32, f32) {
         let (max_width, max_height) = self.get_max_size();
         let (child_widths, child_heights) = self.get_child_sizes();
         let container_widths = self.get_widths_from_child_widths(&child_widths, max_width);
+        let children_width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
 
-        let width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let width = self.get_width_from_children_width(children_width, max_width);
         let height = self.get_height_from_child_heights(&child_heights, max_height);
         (width, height)
     }
@@ -487,7 +501,7 @@ pub struct RowStyle {
     pub v_fill: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum Grow {
     None,
     Equal,
@@ -558,26 +572,35 @@ impl Column {
 
     fn get_heights_from_child_heights(&self, child_heights: &Vec<f32>, max_height: Option<f32>) -> Vec<f32> {
         let mut container_heights: Vec<f32> = child_heights.clone();
-        let children_height: f32 = container_heights.iter().sum();
-        if let Some(max_height) = max_height {
-            let extra_space = max_height - children_height - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
-            match self.style.v_fill {
-                Grow::None => {}
-                Grow::Equal => {
-                    let count = self.children.len() as f32;
-                    for child_height in container_heights.iter_mut() {
-                        *child_height += extra_space / count;
-                    }
+        let children_height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let height = self.get_height_from_children_height(children_height, max_height);
+        let extra_space = height - children_height - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
+        match self.style.v_fill {
+            Grow::None => {}
+            Grow::Equal => {
+                let count = self.children.len() as f32;
+                for child_height in container_heights.iter_mut() {
+                    *child_height += extra_space / count;
                 }
-                Grow::Ratio(ref amounts) => {
-                    let total: f32 = amounts.iter().sum();
-                    for (i, child_height) in container_heights.iter_mut().enumerate() {
-                        *child_height += (amounts[i] / total) * extra_space;
-                    }
+            }
+            Grow::Ratio(ref amounts) => {
+                let total: f32 = amounts.iter().sum();
+                for (i, child_height) in container_heights.iter_mut().enumerate() {
+                    *child_height += (amounts[i] / total) * extra_space;
                 }
             }
         }
         container_heights
+    }
+
+    fn get_height_from_children_height(&self, children_height: f32, max_height: Option<f32>) -> f32 {
+        let height = if max_height.is_some() && self.style.v_fill != Grow::None {
+            max_height.unwrap()
+        } else {
+            let contents_height = children_height + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+            self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height))
+        };
+        height
     }
 
     fn get_child_sizes(&self) -> (Vec<f32>, Vec<f32>) {
@@ -643,16 +666,21 @@ impl Widget for Column {
             width = width.max(child_width);
             height += child_height + self.style.spacing;
         }
-        (width + 2.0 * self.style.padding, height + 2.0 * self.style.padding)
+        let contents_width = width + 2.0 * self.style.padding;
+        let contents_height = height + 2.0 * self.style.padding;
+        let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
+        let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
+        (min_width, min_height)
     }
 
     fn get_size(&self) -> (f32, f32) {
         let (max_width, max_height) = self.get_max_size();
         let (child_widths, child_heights) = self.get_child_sizes();
         let container_heights = self.get_heights_from_child_heights(&child_heights, max_height);
+        let children_height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
 
         let width = self.get_width_from_child_widths(&child_widths, max_width);
-        let height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let height = self.get_height_from_children_height(children_height, max_height);
         (width, height)
     }
 
