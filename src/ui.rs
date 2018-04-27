@@ -257,15 +257,15 @@ impl Widget for Container {
 }
 
 pub struct ContainerStyle {
-    padding: f32,
-    min_width: Option<f32>,
-    max_width: Option<f32>,
-    min_height: Option<f32>,
-    max_height: Option<f32>,
-    h_align: HAlign,
-    v_align: VAlign,
-    h_fill: bool,
-    v_fill: bool,
+    pub padding: f32,
+    pub min_width: Option<f32>,
+    pub max_width: Option<f32>,
+    pub min_height: Option<f32>,
+    pub max_height: Option<f32>,
+    pub h_align: HAlign,
+    pub v_align: VAlign,
+    pub h_fill: bool,
+    pub v_fill: bool,
 }
 
 pub enum HAlign { Left, Center, Right }
@@ -475,16 +475,16 @@ impl Widget for Row {
 }
 
 pub struct RowStyle {
-    padding: f32,
-    spacing: f32,
-    min_width: Option<f32>,
-    max_width: Option<f32>,
-    min_height: Option<f32>,
-    max_height: Option<f32>,
-    h_align: HAlign,
-    v_align: VAlign,
-    h_fill: Grow,
-    v_fill: bool,
+    pub padding: f32,
+    pub spacing: f32,
+    pub min_width: Option<f32>,
+    pub max_width: Option<f32>,
+    pub min_height: Option<f32>,
+    pub max_height: Option<f32>,
+    pub h_align: HAlign,
+    pub v_align: VAlign,
+    pub h_fill: Grow,
+    pub v_fill: bool,
 }
 
 #[derive(Clone)]
@@ -699,16 +699,16 @@ impl Widget for Column {
 }
 
 pub struct ColumnStyle {
-    padding: f32,
-    spacing: f32,
-    min_width: Option<f32>,
-    max_width: Option<f32>,
-    min_height: Option<f32>,
-    max_height: Option<f32>,
-    h_align: HAlign,
-    v_align: VAlign,
-    h_fill: bool,
-    v_fill: Grow,
+    pub padding: f32,
+    pub spacing: f32,
+    pub min_width: Option<f32>,
+    pub max_width: Option<f32>,
+    pub min_height: Option<f32>,
+    pub max_height: Option<f32>,
+    pub h_align: HAlign,
+    pub v_align: VAlign,
+    pub h_fill: bool,
+    pub v_fill: Grow,
 }
 
 impl Default for ColumnStyle {
