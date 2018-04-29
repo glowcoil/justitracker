@@ -259,6 +259,10 @@ impl Renderer {
     }
 
     fn pixel_to_ndc(&self, x: f32, y: f32) -> (f32, f32) {
-        (2.0 * (x / self.width as f32 - 0.5), 2.0 * (1.0 - y / self.height as f32 - 0.5))
+        let (screen_width, screen_height) = {
+            let (w, h) = self.display.get_framebuffer_dimensions();
+            (w as f32, h as f32)
+        };
+        (2.0 * (x / screen_width as f32 - 0.5), 2.0 * (1.0 - y / screen_height as f32 - 0.5))
     }
 }
