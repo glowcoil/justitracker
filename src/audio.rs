@@ -82,7 +82,7 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                                 }
 
                                 if let Some(ref factors) = song.notes[track][note] {
-                                    let pitch = 2.0f32.powi(factors[0]) * 3.0f32.powi(factors[1]) * 5.0f32.powi(factors[2]) * 11.0f32.powi(factors[3]);
+                                    let pitch = 2.0f32.powi(factors[0]) * 3.0f32.powi(factors[1]) * 5.0f32.powi(factors[2]) * 7.0f32.powi(factors[3]);
                                     let phase: f32 = (t as f32 * pitch) % song.samples[track].len() as f32;
 
                                     let phase_whole = phase as usize;
