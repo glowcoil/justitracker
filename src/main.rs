@@ -148,6 +148,7 @@ fn main() {
 
     renderer.render(ui.display());
 
+    let mut cursor_hide = false;
     events_loop.run_forever(|ev| {
         let input_event = match ev {
             glutin::Event::WindowEvent { event, .. } => match event {
@@ -205,11 +206,22 @@ fn main() {
         if let Some(input_event) = input_event {
             let response = ui.handle_event(input_event);
 
+            if response.mouse_cursor == MouseCursor::NoneCursor {
+                if !cursor_hide {
+                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide);
+                    cursor_hide = true;
+                }
+            } else {
+                if cursor_hide {
+                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal);
+                    cursor_hide = false;
+                }
+                renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
+            }
+
             if let Some((x, y)) = response.set_mouse_position {
                 renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32);
             }
-
-            renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
 
             while let Some(message) = messages.borrow_mut().pop_front() {
                 match message {

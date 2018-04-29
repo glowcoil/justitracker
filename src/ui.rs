@@ -15,7 +15,6 @@ pub struct UI {
     keyboard_focus: Option<WidgetRef>,
     mouse_focus: Option<WidgetRef>,
     mouse_position_captured: bool,
-
 }
 
 #[derive(Copy, Clone)]
@@ -138,9 +137,7 @@ impl UI {
     pub fn handle_event(&mut self, ev: InputEvent) -> UIEventResponse {
         match ev {
             InputEvent::CursorMoved { position } => {
-                if !self.mouse_position_captured {
-                    self.input_state.mouse_position = position;
-                }
+                self.input_state.mouse_position = position;
             }
             InputEvent::MousePress { button } => {
                 match button {
@@ -211,15 +208,19 @@ impl UI {
             self.mouse_position_captured = true;
         }
         ui_response.mouse_cursor = response.mouse_cursor;
-        if self.mouse_position_captured {
-            ui_response.set_mouse_position = Some((self.input_state.mouse_position.x, self.input_state.mouse_position.y));
-        }
 
         match ev {
             InputEvent::MouseRelease { button: MouseButton::Left } => {
+                if self.mouse_position_captured {
+                    if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
+                        self.input_state.mouse_position = mouse_drag_origin;
+                        ui_response.set_mouse_position = Some((mouse_drag_origin.x, mouse_drag_origin.y));
+                    }
+                    self.mouse_position_captured = false;
+                }
+
                 self.input_state.mouse_drag_origin = None;
                 self.mouse_focus = None;
-                self.mouse_position_captured = false;
             }
             _ => {}
         }
@@ -1070,6 +1071,12 @@ impl Widget for IntegerInput {
                     if let Some(ref on_change) = self.on_change {
                         on_change(new_value);
                     }
+                    return EventResponse {
+                        capture_mouse: true,
+                        capture_mouse_position: true,
+                        mouse_cursor: MouseCursor::NoneCursor,
+                        ..Default::default()
+                    };
                 }
             }
             InputEvent::MouseRelease { button: MouseButton::Left } => {
@@ -1510,7 +1517,7 @@ impl KeyboardButton {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum MouseCursor {
     Default,
     Crosshair,
