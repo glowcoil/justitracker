@@ -137,7 +137,15 @@ impl UI {
     pub fn handle_event(&mut self, ev: InputEvent) -> UIEventResponse {
         match ev {
             InputEvent::CursorMoved { position } => {
-                self.input_state.mouse_position = position;
+                if self.mouse_position_captured {
+                    if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
+                        self.input_state.mouse_position += position - mouse_drag_origin;
+                    } else {
+                        self.input_state.mouse_position = position;
+                    }
+                } else {
+                    self.input_state.mouse_position = position;
+                }
             }
             InputEvent::MousePress { button } => {
                 match button {
@@ -207,6 +215,11 @@ impl UI {
         if response.capture_mouse_position {
             self.mouse_position_captured = true;
         }
+        if self.mouse_position_captured {
+            if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
+                ui_response.set_mouse_position = Some((mouse_drag_origin.x, mouse_drag_origin.y));
+            }
+        }
         ui_response.mouse_cursor = response.mouse_cursor;
 
         match ev {
@@ -214,7 +227,6 @@ impl UI {
                 if self.mouse_position_captured {
                     if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
                         self.input_state.mouse_position = mouse_drag_origin;
-                        ui_response.set_mouse_position = Some((mouse_drag_origin.x, mouse_drag_origin.y));
                     }
                     self.mouse_position_captured = false;
                 }
@@ -1612,10 +1624,22 @@ impl ops::Add for Point {
     }
 }
 
+impl ops::AddAssign for Point {
+    fn add_assign(&mut self, other: Point) {
+        *self = *self + other;
+    }
+}
+
 impl ops::Sub for Point {
     type Output = Point;
     fn sub(self, rhs: Point) -> Point {
         Point { x: self.x - rhs.x, y: self.y - rhs.y }
+    }
+}
+
+impl ops::SubAssign for Point {
+    fn sub_assign(&mut self, other: Point) {
+        *self = *self - other;
     }
 }
 
@@ -1630,5 +1654,11 @@ impl ops::Mul<Point> for f32 {
     type Output = Point;
     fn mul(self, rhs: Point) -> Point {
         Point { x: self * rhs.x, y: self * rhs.y }
+    }
+}
+
+impl ops::MulAssign<f32> for Point {
+    fn mul_assign(&mut self, other: f32) {
+        *self = *self * other;
     }
 }
