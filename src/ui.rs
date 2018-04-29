@@ -2,7 +2,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use glium::glutin;
-use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
+use rusttype::{Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
@@ -12,6 +12,10 @@ pub struct UI {
     root: WidgetRef,
 
     input_state: InputState,
+    keyboard_focus: Option<WidgetRef>,
+    mouse_focus: Option<WidgetRef>,
+    mouse_position_captured: bool,
+
 }
 
 #[derive(Copy, Clone)]
@@ -23,6 +27,22 @@ pub enum InputEvent {
     KeyPress { button: KeyboardButton },
     KeyRelease { button: KeyboardButton },
     TextInput { character: char },
+    LostKeyboardFocus,
+}
+
+#[derive(Copy, Clone)]
+pub struct UIEventResponse {
+    pub set_mouse_position: Option<(f32, f32)>,
+    pub mouse_cursor: MouseCursor,
+}
+
+impl Default for UIEventResponse {
+    fn default() -> UIEventResponse {
+        UIEventResponse {
+            set_mouse_position: None,
+            mouse_cursor: MouseCursor::Default,
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -45,13 +65,33 @@ impl InputState {
     }
 }
 
+pub struct EventResponse {
+    responder: Option<WidgetRef>,
+    capture_keyboard: bool,
+    capture_mouse: bool,
+    capture_mouse_position: bool,
+    mouse_cursor: MouseCursor,
+}
+
+impl Default for EventResponse {
+    fn default() -> EventResponse {
+        EventResponse {
+            responder: None,
+            capture_keyboard: false,
+            capture_mouse: false,
+            capture_mouse_position: false,
+            mouse_cursor: MouseCursor::Default,
+        }
+    }
+}
+
 pub type WidgetRef = Rc<RefCell<Widget>>;
 
 pub trait Widget {
     fn set_container_size(&mut self, w: Option<f32>, h: Option<f32>);
     fn get_min_size(&self) -> (f32, f32);
     fn get_size(&self) -> (f32, f32);
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState);
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse;
     fn display(&self, input_state: InputState) -> DisplayList;
 }
 
@@ -70,6 +110,9 @@ impl UI {
                 mouse_middle_pressed: false,
                 mouse_right_pressed: false,
             },
+            keyboard_focus: None,
+            mouse_focus: None,
+            mouse_position_captured: false,
         }
     }
 
@@ -92,10 +135,12 @@ impl UI {
         self.root.borrow_mut().set_container_size(Some(self.width), Some(self.height));
     }
 
-    pub fn handle_event(&mut self, ev: InputEvent) {
+    pub fn handle_event(&mut self, ev: InputEvent) -> UIEventResponse {
         match ev {
             InputEvent::CursorMoved { position } => {
-                self.input_state.mouse_position = position;
+                if !self.mouse_position_captured {
+                    self.input_state.mouse_position = position;
+                }
             }
             InputEvent::MousePress { button } => {
                 match button {
@@ -127,14 +172,59 @@ impl UI {
             _ => {}
         }
 
-        self.root.borrow_mut().handle_event(ev, self.input_state);
+        let mut ui_response: UIEventResponse = Default::default();
+
+        let response = match ev {
+            InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
+                if let Some(ref focus) = self.mouse_focus {
+                    focus.borrow_mut().handle_event(ev, self.input_state)
+                } else {
+                    self.root.borrow_mut().handle_event(ev, self.input_state)
+                }
+            },
+            InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
+                if let Some(ref focus) = self.keyboard_focus {
+                    focus.borrow_mut().handle_event(ev, self.input_state)
+                } else {
+                    self.root.borrow_mut().handle_event(ev, self.input_state)
+                }
+            }
+            _ => {
+                self.root.borrow_mut().handle_event(ev, self.input_state)
+            }
+        };
+
+        if response.capture_keyboard {
+            if let Some(ref focus) = self.keyboard_focus {
+                focus.borrow_mut().handle_event(InputEvent::LostKeyboardFocus, self.input_state);
+            }
+            if let Some(ref responder) = response.responder {
+                self.keyboard_focus = Some(responder.clone());
+            }
+        }
+        if response.capture_mouse {
+            if let Some(ref responder) = response.responder {
+                self.mouse_focus = Some(responder.clone());
+            }
+        }
+        if response.capture_mouse_position {
+            self.mouse_position_captured = true;
+        }
+        ui_response.mouse_cursor = response.mouse_cursor;
+        if self.mouse_position_captured {
+            ui_response.set_mouse_position = Some((self.input_state.mouse_position.x, self.input_state.mouse_position.y));
+        }
 
         match ev {
             InputEvent::MouseRelease { button: MouseButton::Left } => {
                 self.input_state.mouse_drag_origin = None;
+                self.mouse_focus = None;
+                self.mouse_position_captured = false;
             }
             _ => {}
         }
+
+        ui_response
     }
 
     pub fn display(&self) -> DisplayList {
@@ -155,7 +245,7 @@ impl Widget for Empty {
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {}
     fn get_min_size(&self) -> (f32, f32) { (0.0, 0.0) }
     fn get_size(&self) -> (f32, f32) { (0.0, 0.0) }
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {}
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse { Default::default() }
     fn display(&self, input_state: InputState) -> DisplayList { DisplayList::new() }
 }
 
@@ -241,10 +331,12 @@ impl Widget for Container {
         self.get_size_from_child_size(child_width, child_height)
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         let (child_width, child_height) = self.child.borrow().get_size();
         let (x, y) = self.get_child_offset(child_width, child_height);
-        self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
+        let mut response = self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
+        response.responder = response.responder.or_else(|| Some(self.child.clone()));
+        response
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -290,7 +382,6 @@ impl Default for ContainerStyle {
 
 pub struct Row {
     children: Vec<WidgetRef>,
-    focus: Option<usize>,
     style: RowStyle,
     container_width: Option<f32>,
     container_height: Option<f32>,
@@ -298,7 +389,7 @@ pub struct Row {
 
 impl Row {
     pub fn new(children: Vec<WidgetRef>) -> Rc<RefCell<Row>> {
-        Rc::new(RefCell::new(Row { children: children, focus: None, style: Default::default(), container_width: None, container_height: None }))
+        Rc::new(RefCell::new(Row { children: children, style: Default::default(), container_width: None, container_height: None }))
     }
 
     pub fn get_child(&self, i: usize) -> WidgetRef {
@@ -446,7 +537,7 @@ impl Widget for Row {
         (width, height)
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         let (child_offsets, child_widths, child_heights) = self.get_layout();
 
         match ev {
@@ -456,21 +547,16 @@ impl Widget for Row {
                 for (i, child) in self.children.iter().enumerate() {
                     let (x, y) = child_offsets[i];
                     if x <= mouse_position.x && mouse_position.x < x + child_widths[i] && y <= mouse_position.y && mouse_position.y < y + child_heights[i] {
-                        if let InputEvent::MousePress { .. } = ev {
-                            self.focus = Some(i);
-                        }
-                        child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-                        break;
+                        let mut response = child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
+                        response.responder = response.responder.or_else(|| Some(child.clone()));
+                        return response;
                     }
                 }
-            },
-            InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
-                if let Some(focus) = self.focus {
-                    let (x, y) = child_offsets[focus];
-                    self.children[focus].borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-                }
-            },
+            }
+            _ => {}
         }
+
+        Default::default()
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -528,7 +614,6 @@ impl Default for RowStyle {
 
 pub struct Column {
     children: Vec<WidgetRef>,
-    focus: Option<usize>,
     style: ColumnStyle,
     container_width: Option<f32>,
     container_height: Option<f32>,
@@ -536,7 +621,7 @@ pub struct Column {
 
 impl Column {
     pub fn new(children: Vec<WidgetRef>) -> Rc<RefCell<Column>> {
-        Rc::new(RefCell::new(Column { children: children, focus: None, style: Default::default(), container_width: None, container_height: None }))
+        Rc::new(RefCell::new(Column { children: children, style: Default::default(), container_width: None, container_height: None }))
     }
 
     pub fn get_child(&self, i: usize) -> WidgetRef {
@@ -684,7 +769,7 @@ impl Widget for Column {
         (width, height)
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         let (child_offsets, child_widths, child_heights) = self.get_layout();
 
         match ev {
@@ -694,21 +779,16 @@ impl Widget for Column {
                 for (i, child) in self.children.iter().enumerate() {
                     let (x, y) = child_offsets[i];
                     if x <= mouse_position.x && mouse_position.x < x + child_widths[i] && y <= mouse_position.y && mouse_position.y < y + child_heights[i] {
-                        if let InputEvent::MousePress { .. } = ev {
-                            self.focus = Some(i);
-                        }
-                        child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-                        break;
+                        let mut response = child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
+                        response.responder = response.responder.or_else(|| Some(child.clone()));
+                        return response;
                     }
                 }
-            },
-            InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
-                if let Some(focus) = self.focus {
-                    let (x, y) = child_offsets[focus];
-                    self.children[focus].borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-                }
-            },
+            }
+            _ => {}
         }
+
+        Default::default()
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -789,7 +869,7 @@ impl Widget for Button {
         self.contents.borrow().get_size()
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         match ev {
             InputEvent::MouseRelease { button: MouseButton::Left } => {
                 let (width, height) = self.get_size();
@@ -801,6 +881,8 @@ impl Widget for Button {
             }
             _ => {}
         }
+
+        Default::default()
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -855,8 +937,8 @@ impl Widget for Label {
         get_label_size(&*self.font, self.scale, &self.text)
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
-
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
+        Default::default()
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -903,7 +985,7 @@ impl Widget for Textbox {
         (width.max(40.0), height)
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         match ev {
             InputEvent::KeyPress { button: KeyboardButton::Back } => {
                 self.text.pop();
@@ -921,6 +1003,8 @@ impl Widget for Textbox {
             }
             _ => {}
         }
+
+        Default::default()
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -975,7 +1059,7 @@ impl Widget for IntegerInput {
         self.container.borrow().get_size()
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) {
+    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         match ev {
             InputEvent::CursorMoved { position } => {
                 if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
@@ -996,6 +1080,8 @@ impl Widget for IntegerInput {
             }
             _ => {}
         }
+
+        Default::default()
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
@@ -1420,6 +1506,89 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::WebSearch => KeyboardButton::WebSearch,
             glutin::VirtualKeyCode::WebStop => KeyboardButton::WebStop,
             glutin::VirtualKeyCode::Yen => KeyboardButton::Yen,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum MouseCursor {
+    Default,
+    Crosshair,
+    Hand,
+    Arrow,
+    Move,
+    Text,
+    Wait,
+    Help,
+    Progress,
+    NotAllowed,
+    ContextMenu,
+    NoneCursor,
+    Cell,
+    VerticalText,
+    Alias,
+    Copy,
+    NoDrop,
+    Grab,
+    Grabbing,
+    AllScroll,
+    ZoomIn,
+    ZoomOut,
+    EResize,
+    NResize,
+    NeResize,
+    NwResize,
+    SResize,
+    SeResize,
+    SwResize,
+    WResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ColResize,
+    RowResize,
+}
+
+impl MouseCursor {
+    pub fn to_glutin(cursor: MouseCursor) -> glutin::MouseCursor {
+        match cursor {
+            MouseCursor::Default => glutin::MouseCursor::Default,
+            MouseCursor::Crosshair => glutin::MouseCursor::Crosshair,
+            MouseCursor::Hand => glutin::MouseCursor::Hand,
+            MouseCursor::Arrow => glutin::MouseCursor::Arrow,
+            MouseCursor::Move => glutin::MouseCursor::Move,
+            MouseCursor::Text => glutin::MouseCursor::Text,
+            MouseCursor::Wait => glutin::MouseCursor::Wait,
+            MouseCursor::Help => glutin::MouseCursor::Help,
+            MouseCursor::Progress => glutin::MouseCursor::Progress,
+            MouseCursor::NotAllowed => glutin::MouseCursor::NotAllowed,
+            MouseCursor::ContextMenu => glutin::MouseCursor::ContextMenu,
+            MouseCursor::NoneCursor => glutin::MouseCursor::NoneCursor,
+            MouseCursor::Cell => glutin::MouseCursor::Cell,
+            MouseCursor::VerticalText => glutin::MouseCursor::VerticalText,
+            MouseCursor::Alias => glutin::MouseCursor::Alias,
+            MouseCursor::Copy => glutin::MouseCursor::Copy,
+            MouseCursor::NoDrop => glutin::MouseCursor::NoDrop,
+            MouseCursor::Grab => glutin::MouseCursor::Grab,
+            MouseCursor::Grabbing => glutin::MouseCursor::Grabbing,
+            MouseCursor::AllScroll => glutin::MouseCursor::AllScroll,
+            MouseCursor::ZoomIn => glutin::MouseCursor::ZoomIn,
+            MouseCursor::ZoomOut => glutin::MouseCursor::ZoomOut,
+            MouseCursor::EResize => glutin::MouseCursor::EResize,
+            MouseCursor::NResize => glutin::MouseCursor::NResize,
+            MouseCursor::NeResize => glutin::MouseCursor::NeResize,
+            MouseCursor::NwResize => glutin::MouseCursor::NwResize,
+            MouseCursor::SResize => glutin::MouseCursor::SResize,
+            MouseCursor::SeResize => glutin::MouseCursor::SeResize,
+            MouseCursor::SwResize => glutin::MouseCursor::SwResize,
+            MouseCursor::WResize => glutin::MouseCursor::WResize,
+            MouseCursor::EwResize => glutin::MouseCursor::EwResize,
+            MouseCursor::NsResize => glutin::MouseCursor::NsResize,
+            MouseCursor::NeswResize => glutin::MouseCursor::NeswResize,
+            MouseCursor::NwseResize => glutin::MouseCursor::NwseResize,
+            MouseCursor::ColResize => glutin::MouseCursor::ColResize,
+            MouseCursor::RowResize => glutin::MouseCursor::RowResize,
         }
     }
 }

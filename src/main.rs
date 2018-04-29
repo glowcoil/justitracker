@@ -65,7 +65,8 @@ fn main() {
     let (width, height, dpi_factor) = {
         let window = display.gl_window();
         let (width, height) = window.get_inner_size().unwrap();
-        (width, height, window.hidpi_factor())
+        let dpi_factor = window.hidpi_factor();
+        (width, height, dpi_factor)
     };
 
     let mut renderer = Renderer::new(display, width, height, dpi_factor);
@@ -132,7 +133,9 @@ fn main() {
                 });
                 factors.push(factor);
             }
-            track.push(Row::new(factors));
+            let note = Row::new(factors);
+            // note.borrow_mut().get_style().min_width = Some(100.0);
+            track.push(note);
         }
         columns.push(Column::new(track));
     }
@@ -143,14 +146,16 @@ fn main() {
 
     let audio_send = start_audio_thread();
 
+    renderer.render(ui.display());
+
     events_loop.run_forever(|ev| {
-        match ev {
+        let input_event = match ev {
             glutin::Event::WindowEvent { event, .. } => match event {
                 glutin::WindowEvent::Closed => {
-                    return glutin::ControlFlow::Break
+                    return glutin::ControlFlow::Break;
                 }
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
-                    ui.handle_event(InputEvent::CursorMoved { position: Point { x: x as f32, y: y as f32 } });
+                    Some(InputEvent::CursorMoved { position: Point { x: x as f32, y: y as f32 } })
                 }
                 glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers: _ } => {
                     let button = match button {
@@ -163,12 +168,14 @@ fn main() {
                     if let Some(button) = button {
                         match state {
                             glutin::ElementState::Pressed => {
-                                ui.handle_event(InputEvent::MousePress { button: button });
+                                Some(InputEvent::MousePress { button: button })
                             }
                             glutin::ElementState::Released => {
-                                ui.handle_event(InputEvent::MouseRelease { button: button });
+                                Some(InputEvent::MouseRelease { button: button })
                             }
                         }
+                    } else {
+                        None
                     }
                 }
                 glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
@@ -177,51 +184,63 @@ fn main() {
 
                         match input.state {
                             glutin::ElementState::Pressed => {
-                                ui.handle_event(InputEvent::KeyPress { button: button });
+                                Some(InputEvent::KeyPress { button: button })
                             }
                             glutin::ElementState::Released => {
-                                ui.handle_event(InputEvent::KeyRelease { button: button });
+                                Some(InputEvent::KeyRelease { button: button })
                             }
                         }
+                    } else {
+                        None
                     }
                 }
                 glutin::WindowEvent::ReceivedCharacter(c) => {
-                    ui.handle_event(InputEvent::TextInput { character: c });
+                    Some(InputEvent::TextInput { character: c })
                 }
-                _ => (),
+                _ => None,
             },
-            _ => (),
-        }
+            _ => None,
+        };
 
-        while let Some(message) = messages.borrow_mut().pop_front() {
-            match message {
-                Message::Play => {
-                    audio_send.send(AudioMessage::Play).unwrap();
-                }
-                Message::Stop => {
-                    audio_send.send(AudioMessage::Stop).unwrap();
-                }
-                Message::LoadSample(track) => {
-                    if let Some(path) = file::open_file() {
-                        let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
-                        song.samples[track] = samples;
+        if let Some(input_event) = input_event {
+            let response = ui.handle_event(input_event);
+
+            if let Some((x, y)) = response.set_mouse_position {
+                renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32);
+            }
+
+            renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
+
+            while let Some(message) = messages.borrow_mut().pop_front() {
+                match message {
+                    Message::Play => {
+                        audio_send.send(AudioMessage::Play).unwrap();
+                    }
+                    Message::Stop => {
+                        audio_send.send(AudioMessage::Stop).unwrap();
+                    }
+                    Message::LoadSample(track) => {
+                        if let Some(path) = file::open_file() {
+                            let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
+                            song.samples[track] = samples;
+                            audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                        }
+                    }
+                    Message::SetNote { track, note, factor, power } => {
+                        if song.notes[track][note].is_none() {
+                            song.notes[track][note] = Some(vec![0, 0, 0, 0]);
+                        }
+                        match song.notes[track][note].as_mut() {
+                            Some(note) => { note[factor] = power; }
+                            None => {}
+                        }
                         audio_send.send(AudioMessage::Song(song.clone())).unwrap();
                     }
                 }
-                Message::SetNote { track, note, factor, power } => {
-                    if song.notes[track][note].is_none() {
-                        song.notes[track][note] = Some(vec![0, 0, 0, 0]);
-                    }
-                    match song.notes[track][note].as_mut() {
-                        Some(note) => { note[factor] = power; }
-                        None => {}
-                    }
-                    audio_send.send(AudioMessage::Song(song.clone())).unwrap();
-                }
             }
-        }
 
-        renderer.render(ui.display());
+            renderer.render(ui.display());
+        }
 
         glutin::ControlFlow::Continue
     });
