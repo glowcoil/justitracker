@@ -1042,6 +1042,7 @@ pub struct IntegerInput {
     value: i32,
     new_value: Option<i32>,
     on_change: Option<Box<Fn(i32)>>,
+    format: Option<Box<Fn(i32) -> String>>,
     container: Rc<RefCell<Container>>,
     label: Rc<RefCell<Label>>,
 }
@@ -1051,11 +1052,16 @@ impl IntegerInput {
         let label = Label::new(&value.to_string(), font);
         let container = Container::new(label.clone());
         container.borrow_mut().get_style().padding = 2.0;
-        Rc::new(RefCell::new(IntegerInput { value: value, new_value: None, on_change: None, container: container, label: label }))
+        Rc::new(RefCell::new(IntegerInput { value: value, new_value: None, on_change: None, format: None, container: container, label: label }))
     }
 
     pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(i32) {
         self.on_change = Some(Box::new(callback));
+    }
+
+    pub fn format<F>(&mut self, callback: F) where F: 'static + Fn(i32) -> String {
+        self.label.borrow_mut().set_text(&callback(self.value));
+        self.format = Some(Box::new(callback));
     }
 }
 
@@ -1079,7 +1085,12 @@ impl Widget for IntegerInput {
                     let dy = -(input_state.mouse_position.y - mouse_drag_origin.y);
                     let new_value = self.value + (dy / 8.0) as i32;
                     self.new_value = Some(new_value);
-                    self.label.borrow_mut().set_text(&new_value.to_string());
+                    let text = if let Some(ref format) = self.format {
+                        format(new_value)
+                    } else {
+                        new_value.to_string()
+                    };
+                    self.label.borrow_mut().set_text(&text);
                     if let Some(ref on_change) = self.on_change {
                         on_change(new_value);
                     }
