@@ -152,7 +152,10 @@ impl Renderer {
             glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList),
             &self.rect_program,
             &glium::uniforms::EmptyUniforms,
-            &Default::default()).unwrap();
+            &glium::DrawParameters {
+                blend: glium::Blend::alpha_blending(),
+                ..Default::default()
+            }).unwrap();
     }
 
     fn render_glyphs<'a>(&mut self, target: &mut glium::Frame, glyphs: Vec<PositionedGlyph<'a>>) {
