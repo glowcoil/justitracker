@@ -306,19 +306,22 @@ impl Container {
         (width, height)
     }
 
-    fn get_child_offset(&self, child_width: f32, child_height: f32) -> (f32, f32) {
+    fn get_layout(&self) -> ((f32, f32), (f32, f32)) {
+        let (child_width, child_height) = self.child.borrow().get_size();
+
         let (width, height) = self.get_size_from_child_size(child_width, child_height);
-        let x = match self.style.h_align {
+        let x_offset = match self.style.h_align {
             HAlign::Left => self.style.padding,
             HAlign::Center => width / 2.0 - child_width / 2.0,
             HAlign::Right => width - self.style.padding - child_width,
         };
-        let y = match self.style.v_align {
+        let y_offset = match self.style.v_align {
             VAlign::Top => self.style.padding,
             VAlign::Center => height / 2.0 - child_height / 2.0,
             VAlign::Bottom => height - self.style.padding - child_height,
         };
-        (x, y)
+
+        ((x_offset, y_offset), (width, height))
     }
 }
 
@@ -345,18 +348,19 @@ impl Widget for Container {
     }
 
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        let (child_width, child_height) = self.child.borrow().get_size();
-        let (x, y) = self.get_child_offset(child_width, child_height);
+        let ((x, y), (width, height)) = self.get_layout();
         let mut response = self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
         response.responder = response.responder.or_else(|| Some(self.child.clone()));
         response
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        let (child_width, child_height) = self.child.borrow().get_size();
-        let (x, y) = self.get_child_offset(child_width, child_height);
-        let mut list = self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
-        list.translate(Point { x: x, y: y });
+        let ((x, y), (width, height)) = self.get_layout();
+        let mut list = DisplayList::new();
+        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
+        let mut child_list = self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
+        child_list.translate(Point { x: x, y: y });
+        list.merge(child_list);
         list
     }
 }
@@ -371,6 +375,7 @@ pub struct ContainerStyle {
     pub v_align: VAlign,
     pub h_fill: bool,
     pub v_fill: bool,
+    pub background_color: [f32; 4],
 }
 
 pub enum HAlign { Left, Center, Right }
@@ -388,6 +393,7 @@ impl Default for ContainerStyle {
             v_align: VAlign::Top,
             h_fill: false,
             v_fill: false,
+            background_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -469,28 +475,18 @@ impl Row {
         height
     }
 
-    fn get_child_sizes(&self) -> (Vec<f32>, Vec<f32>) {
-        let mut child_widths = Vec::with_capacity(self.children.len());
-        let mut child_heights = Vec::with_capacity(self.children.len());
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_size();
-            child_widths.push(child_width);
-            child_heights.push(child_height)
-        }
-        (child_widths, child_heights)
-    }
-
-    fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<f32>, Vec<f32>) {
+    fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<(f32, f32)>, (f32, f32)) {
         let (max_width, max_height) = self.get_max_size();
-        let (child_widths, child_heights) = self.get_child_sizes();
-        let container_widths = self.get_widths_from_child_widths(&child_widths, max_width);
-        let height = self.get_height_from_child_heights(&child_heights, max_height);
+        let child_sizes: Vec<(f32, f32)> = self.children.iter().map(|child| child.borrow().get_size()).collect();
+        let container_widths = self.get_widths_from_child_widths(&child_sizes.iter().map(|child_size| child_size.0).collect(), max_width);
+        let children_width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let width = self.get_width_from_children_width(children_width, max_width);
+        let height = self.get_height_from_child_heights(&child_sizes.iter().map(|child_size| child_size.1).collect(), max_height);
 
         let mut child_offsets = Vec::with_capacity(self.children.len());
         let mut x_offset = self.style.padding;
         for i in 0..self.children.len() {
-            let child_width = child_widths[i];
-            let child_height = child_heights[i];
+            let (child_width, child_height) = child_sizes[i];
             let container_width = container_widths[i];
 
             let x = x_offset + match self.style.h_align {
@@ -508,7 +504,7 @@ impl Row {
             x_offset += container_width + self.style.spacing;
         }
 
-        (child_offsets, child_widths, child_heights)
+        (child_offsets, child_sizes, (width, height))
     }
 }
 
@@ -540,18 +536,12 @@ impl Widget for Row {
     }
 
     fn get_size(&self) -> (f32, f32) {
-        let (max_width, max_height) = self.get_max_size();
-        let (child_widths, child_heights) = self.get_child_sizes();
-        let container_widths = self.get_widths_from_child_widths(&child_widths, max_width);
-        let children_width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-
-        let width = self.get_width_from_children_width(children_width, max_width);
-        let height = self.get_height_from_child_heights(&child_heights, max_height);
+        let (_, _, (width, height)) = self.get_layout();
         (width, height)
     }
 
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        let (child_offsets, child_widths, child_heights) = self.get_layout();
+        let (child_offsets, child_sizes, _) = self.get_layout();
 
         match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
@@ -559,7 +549,7 @@ impl Widget for Row {
 
                 for (i, child) in self.children.iter().enumerate() {
                     let (x, y) = child_offsets[i];
-                    if x <= mouse_position.x && mouse_position.x < x + child_widths[i] && y <= mouse_position.y && mouse_position.y < y + child_heights[i] {
+                    if x <= mouse_position.x && mouse_position.x < x + child_sizes[i].0 && y <= mouse_position.y && mouse_position.y < y + child_sizes[i].1 {
                         let mut response = child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
                         response.responder = response.responder.or_else(|| Some(child.clone()));
                         return response;
@@ -573,9 +563,10 @@ impl Widget for Row {
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        let (child_offsets, _child_widths, _child_heights) = self.get_layout();
+        let (child_offsets, child_sizes, (width, height)) = self.get_layout();
 
         let mut list = DisplayList::new();
+        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
         for (i, child) in self.children.iter().enumerate() {
             let (x, y) = child_offsets[i];
             let mut child_list = child.borrow().display(input_state.translate(Point { x: -x, y: -y }));
@@ -598,6 +589,7 @@ pub struct RowStyle {
     pub v_align: VAlign,
     pub h_fill: Grow,
     pub v_fill: bool,
+    pub background_color: [f32; 4],
 }
 
 #[derive(Clone, PartialEq)]
@@ -620,6 +612,7 @@ impl Default for RowStyle {
             v_align: VAlign::Top,
             h_fill: Grow::None,
             v_fill: false,
+            background_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -712,17 +705,18 @@ impl Column {
         (child_widths, child_heights)
     }
 
-    fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<f32>, Vec<f32>) {
+    fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<(f32, f32)>, (f32, f32)) {
         let (max_width, max_height) = self.get_max_size();
-        let (child_widths, child_heights) = self.get_child_sizes();
-        let width = self.get_width_from_child_widths(&child_widths, max_width);
-        let container_heights = self.get_heights_from_child_heights(&child_heights, max_height);
+        let child_sizes: Vec<(f32, f32)> = self.children.iter().map(|child| child.borrow().get_size()).collect();
+        let container_heights = self.get_heights_from_child_heights(&child_sizes.iter().map(|child_size| child_size.1).collect(), max_height);
+        let children_height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let width = self.get_width_from_child_widths(&child_sizes.iter().map(|child_size| child_size.0).collect(), max_width);
+        let height = self.get_height_from_children_height(children_height, max_height);
 
         let mut child_offsets = Vec::with_capacity(self.children.len());
         let mut y_offset = self.style.padding;
         for i in 0..self.children.len() {
-            let child_width = child_widths[i];
-            let child_height = child_heights[i];
+            let (child_width, child_height) = child_sizes[i];
             let container_height = container_heights[i];
 
             let x = match self.style.h_align {
@@ -740,7 +734,7 @@ impl Column {
             y_offset += container_height + self.style.spacing;
         }
 
-        (child_offsets, child_widths, child_heights)
+        (child_offsets, child_sizes, (width, height))
     }
 }
 
@@ -772,18 +766,12 @@ impl Widget for Column {
     }
 
     fn get_size(&self) -> (f32, f32) {
-        let (max_width, max_height) = self.get_max_size();
-        let (child_widths, child_heights) = self.get_child_sizes();
-        let container_heights = self.get_heights_from_child_heights(&child_heights, max_height);
-        let children_height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-
-        let width = self.get_width_from_child_widths(&child_widths, max_width);
-        let height = self.get_height_from_children_height(children_height, max_height);
+        let (_, _, (width, height)) = self.get_layout();
         (width, height)
     }
 
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        let (child_offsets, child_widths, child_heights) = self.get_layout();
+        let (child_offsets, child_sizes, _) = self.get_layout();
 
         match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
@@ -791,7 +779,7 @@ impl Widget for Column {
 
                 for (i, child) in self.children.iter().enumerate() {
                     let (x, y) = child_offsets[i];
-                    if x <= mouse_position.x && mouse_position.x < x + child_widths[i] && y <= mouse_position.y && mouse_position.y < y + child_heights[i] {
+                    if x <= mouse_position.x && mouse_position.x < x + child_sizes[i].0 && y <= mouse_position.y && mouse_position.y < y + child_sizes[i].1 {
                         let mut response = child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
                         response.responder = response.responder.or_else(|| Some(child.clone()));
                         return response;
@@ -805,9 +793,10 @@ impl Widget for Column {
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        let (child_offsets, child_widths, child_heights) = self.get_layout();
+        let (child_offsets, child_sizes, (width, height)) = self.get_layout();
 
         let mut list = DisplayList::new();
+        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
         for (i, child) in self.children.iter().enumerate() {
             let (x, y) = child_offsets[i];
             let mut child_list = child.borrow().display(input_state.translate(Point { x: -x, y: -y }));
@@ -830,6 +819,7 @@ pub struct ColumnStyle {
     pub v_align: VAlign,
     pub h_fill: bool,
     pub v_fill: Grow,
+    pub background_color: [f32; 4],
 }
 
 impl Default for ColumnStyle {
@@ -845,6 +835,7 @@ impl Default for ColumnStyle {
             v_align: VAlign::Top,
             h_fill: false,
             v_fill: Grow::None,
+            background_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }
