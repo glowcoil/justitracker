@@ -93,8 +93,16 @@ fn main() {
             messages.borrow_mut().push_back(Message::Stop);
         }
     });
-    let controls: Vec<WidgetRef> = vec![play_button, stop_button];
-    root.push(Row::new(controls));
+    let bpm_label = Container::new(Label::new("bpm:", font.clone()));
+    let bpm = IntegerInput::new(120, font.clone());
+    let controls: Vec<WidgetRef> = vec![play_button, stop_button, bpm_label, bpm];
+    let controls_row = Row::new(controls);
+    controls_row.borrow_mut().get_style().v_align = VAlign::Center;
+    root.push(controls_row);
+
+    let mut note_grid = vec![Vec::with_capacity(8); 8];
+    let mut factor_grid = vec![vec![Vec::with_capacity(4); 8]; 8];
+    let mut cursor = (0, 0);
 
     let mut columns: Vec<WidgetRef> = vec![];
     for i in 0..8 {
@@ -110,39 +118,32 @@ fn main() {
             let mut factors: Vec<WidgetRef> = vec![];
             for k in 0..4 {
                 let factor = IntegerInput::new(0, font.clone());
+                factor.borrow_mut().format(|number| {
+                    if number == 0 { "..".to_owned() } else { let mut s = format!("{:02}", number); s.truncate(2); s }
+                });
                 factor.borrow_mut().on_change({
                     let messages = messages.clone();
                     move |n| {
-                        // let fraction: Vec<&str> = text.split("/").collect();
-                        // if fraction.len() > 0 {
-                        //     if let Ok(p) = fraction[0].parse::<f32>() {
-                        //         let q = if fraction.len() == 2 {
-                        //             if let Ok(q) = fraction[1].parse::<f32>() {
-                        //                 q
-                        //             } else {
-                        //                 return;
-                        //             }
-                        //         } else {
-                        //             1.0
-                        //         };
-                        //         messages.borrow_mut().push_back(Message::SetNote { track: i, note: j, pitch: p / q });
-                        //     }
-                        // }
                         messages.borrow_mut().push_back(Message::SetNote { track: i, note: j, factor: k, power: n });
                     }
                 });
+                factor_grid[i][j].push(factor.clone());
                 factors.push(factor);
             }
             let note = Row::new(factors);
-            // note.borrow_mut().get_style().min_width = Some(100.0);
+            note.borrow_mut().get_style().max_width = Some(80.0);
+            note_grid[i].push(note.clone());
             track.push(note);
         }
         columns.push(Column::new(track));
     }
     let grid = Row::new(columns);
+    grid.borrow_mut().get_style().spacing = 2.0;
     root.push(grid);
 
     ui.make_root(Column::new(root));
+
+    note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
 
     let audio_send = start_audio_thread();
 
@@ -150,6 +151,124 @@ fn main() {
 
     let mut cursor_hide = false;
     events_loop.run_forever(|ev| {
+        {
+            let e = &ev;
+            match *e {
+                glutin::Event::WindowEvent { ref event, .. } => match *event {
+                    glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
+                        if let Some(keycode) = input.virtual_keycode {
+                            match input.state {
+                                glutin::ElementState::Pressed => {
+                                    match keycode {
+                                        glutin::VirtualKeyCode::Up => {
+                                            if cursor.1 > 0 {
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.0, 0.0, 0.0, 0.0];
+                                                cursor.1 -= 1;
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
+                                            }
+                                        }
+                                        glutin::VirtualKeyCode::Down => {
+                                            if cursor.1 < 7 {
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.0, 0.0, 0.0, 0.0];
+                                                cursor.1 += 1;
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
+                                            }
+                                        }
+                                        glutin::VirtualKeyCode::Left => {
+                                            if cursor.0 > 0 {
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.0, 0.0, 0.0, 0.0];
+                                                cursor.0 -= 1;
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
+                                            }
+                                        }
+                                        glutin::VirtualKeyCode::Right => {
+                                            if cursor.0 < 7 {
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.0, 0.0, 0.0, 0.0];
+                                                cursor.0 += 1;
+                                                note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
+                                            }
+                                        }
+                                        glutin::VirtualKeyCode::Key1 => {
+                                            if song.notes[cursor.0][cursor.1].is_none() {
+                                                song.notes[cursor.0][cursor.1] = Some(vec![0, 0, 0, 0]);
+                                            }
+                                            match song.notes[cursor.0][cursor.1].as_mut() {
+                                                Some(note) => {
+                                                    if input.modifiers.shift {
+                                                        note[0] -= 1;
+                                                    } else {
+                                                        note[0] += 1;
+                                                    }
+                                                    factor_grid[cursor.0][cursor.1][0].borrow_mut().set_value(note[0]);
+                                                }
+                                                None => {}
+                                            }
+                                            audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                                        }
+                                        glutin::VirtualKeyCode::Key2 => {
+                                            if song.notes[cursor.0][cursor.1].is_none() {
+                                                song.notes[cursor.0][cursor.1] = Some(vec![0, 0, 0, 0]);
+                                            }
+                                            match song.notes[cursor.0][cursor.1].as_mut() {
+                                                Some(note) => {
+                                                    if input.modifiers.shift {
+                                                        note[1] -= 1;
+                                                    } else {
+                                                        note[1] += 1;
+                                                    }
+                                                    factor_grid[cursor.0][cursor.1][1].borrow_mut().set_value(note[1]);
+                                                }
+                                                None => {}
+                                            }
+                                            audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                                        }
+                                        glutin::VirtualKeyCode::Key3 => {
+                                            if song.notes[cursor.0][cursor.1].is_none() {
+                                                song.notes[cursor.0][cursor.1] = Some(vec![0, 0, 0, 0]);
+                                            }
+                                            match song.notes[cursor.0][cursor.1].as_mut() {
+                                                Some(note) => {
+                                                    if input.modifiers.shift {
+                                                        note[2] -= 1;
+                                                    } else {
+                                                        note[2] += 1;
+                                                    }
+                                                    factor_grid[cursor.0][cursor.1][2].borrow_mut().set_value(note[2]);
+                                                }
+                                                None => {}
+                                            }
+                                            audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                                        }
+                                        glutin::VirtualKeyCode::Key4 => {
+                                            if song.notes[cursor.0][cursor.1].is_none() {
+                                                song.notes[cursor.0][cursor.1] = Some(vec![0, 0, 0, 0]);
+                                            }
+                                            match song.notes[cursor.0][cursor.1].as_mut() {
+                                                Some(note) => {
+                                                    if input.modifiers.shift {
+                                                        note[3] -= 1;
+                                                    } else {
+                                                        note[3] += 1;
+                                                    }
+                                                    factor_grid[cursor.0][cursor.1][3].borrow_mut().set_value(note[3]);
+                                                }
+                                                None => {}
+                                            }
+                                            audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                _ => {}
+            }
+        }
+
         let input_event = match ev {
             glutin::Event::WindowEvent { event, .. } => match event {
                 glutin::WindowEvent::Closed => {
