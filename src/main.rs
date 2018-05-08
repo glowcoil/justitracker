@@ -1,7 +1,6 @@
 mod ui;
 mod render;
 mod audio;
-mod file;
 
 #[cfg(target_os = "macos")]
 #[macro_use]
@@ -19,6 +18,7 @@ extern crate unicode_normalization;
 extern crate cpal;
 extern crate hound;
 extern crate libc;
+extern crate nfd;
 
 use glium::glutin;
 
@@ -232,10 +232,15 @@ fn main() {
                         audio_send.send(AudioMessage::Stop).unwrap();
                     }
                     Message::LoadSample(track) => {
-                        if let Some(path) = file::open_file() {
-                            let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
-                            song.samples[track] = samples;
-                            audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                        if let Ok(result) = nfd::dialog().filter("wav").open() {
+                            match result {
+                                nfd::Response::Okay(path) => {
+                                    let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
+                                    song.samples[track] = samples;
+                                    audio_send.send(AudioMessage::Song(song.clone())).unwrap();
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     Message::SetNote { track, note, factor, power } => {
