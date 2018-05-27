@@ -914,17 +914,71 @@ pub struct Label {
     text: String,
     font: Rc<Font<'static>>,
     scale: Scale,
+    glyphs: Vec<PositionedGlyph<'static>>,
+    height: f32,
+    width: f32,
 }
 
 impl Label {
     pub fn new(text: &str, font: Rc<Font<'static>>) -> Rc<RefCell<Label>> {
-        Rc::new(RefCell::new(Label { text: text.to_string(), font: font, scale: Scale::uniform(14.0) }))
+        let mut label = Label {
+            text: String::new(),
+            font: font,
+            scale: Scale::uniform(14.0),
+            glyphs: Vec::with_capacity(text.len()),
+            width: 0.0,
+            height: 0.0,
+        };
+        label.set_text(text);
+        Rc::new(RefCell::new(label))
     }
 
     pub fn set_text(&mut self, text: &str) {
         self.text.clear();
         self.text.push_str(text);
+        self.layout_text();
     }
+
+    pub fn modify_text<F>(&mut self, closure: F) where F: 'static + Fn(&mut String) {
+        closure(&mut self.text);
+        self.layout_text();
+    }
+
+    pub fn get_text(&self) -> &str {
+        &self.text
+    }
+
+    fn layout_text(&mut self) {
+        use unicode_normalization::UnicodeNormalization;
+        self.glyphs.clear();
+
+        let v_metrics = self.font.v_metrics(self.scale);
+        let mut caret = point(0.0, v_metrics.ascent);
+        let mut last_glyph_id = None;
+        for c in self.text.nfc() {
+            if c.is_control() {
+                continue;
+            }
+            let base_glyph = if let Some(glyph) = self.font.glyph(c) {
+                glyph
+            } else {
+                continue;
+            };
+            if let Some(id) = last_glyph_id.take() {
+                let glyph_width = self.font.pair_kerning(self.scale, id, base_glyph.id());
+                caret.x += glyph_width;
+            }
+            last_glyph_id = Some(base_glyph.id());
+            let glyph = base_glyph.scaled(self.scale).positioned(caret);
+            caret.x += glyph.unpositioned().h_metrics().advance_width;
+
+            self.glyphs.push(glyph.standalone());
+        }
+
+        self.height = v_metrics.ascent - v_metrics.descent;
+        self.width = caret.x;
+    }
+
 }
 
 impl Widget for Label {
@@ -933,11 +987,11 @@ impl Widget for Label {
     }
 
     fn get_min_size(&self) -> (f32, f32) {
-        get_label_size(&*self.font, self.scale, &self.text)
+        (self.width, self.height)
     }
 
     fn get_size(&self) -> (f32, f32) {
-        get_label_size(&*self.font, self.scale, &self.text)
+        (self.width, self.height)
     }
 
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
@@ -945,28 +999,23 @@ impl Widget for Label {
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        let glyphs = layout_label(&*self.font, self.scale, 0.0, 0.0, &self.text);
-
         let mut list = DisplayList::new();
-        for glyph in glyphs.iter() {
+        for glyph in self.glyphs.iter() {
             list.glyph(glyph.standalone());
         }
-
         list
     }
 }
 
 
 pub struct Textbox {
-    text: String,
+    label: Rc<RefCell<Label>>,
     on_change: Option<Box<Fn(&str)>>,
-    font: Rc<Font<'static>>,
-    scale: Scale,
 }
 
 impl Textbox {
     pub fn new(font: Rc<Font<'static>>) -> Rc<RefCell<Textbox>> {
-        Rc::new(RefCell::new(Textbox { text: String::new(), on_change: None, font: font, scale: Scale::uniform(14.0) }))
+        Rc::new(RefCell::new(Textbox { label: Label::new("", font), on_change: None }))
     }
 
     pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(&str) {
@@ -976,31 +1025,33 @@ impl Textbox {
 
 impl Widget for Textbox {
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-
+        self.label.borrow_mut().set_container_size(width, height);
     }
 
     fn get_min_size(&self) -> (f32, f32) {
-        self.get_size()
+        self.label.borrow().get_size()
     }
 
     fn get_size(&self) -> (f32, f32) {
-        let (width, height) = get_label_size(&*self.font, self.scale, &self.text);
+        let (width, height) = self.label.borrow().get_size();
         (width.max(40.0), height)
     }
 
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
         match ev {
             InputEvent::KeyPress { button: KeyboardButton::Back } => {
-                self.text.pop();
+                let mut label = self.label.borrow_mut();
+                label.modify_text(|text| { text.pop(); () });
                 if let Some(ref on_change) = self.on_change {
-                    on_change(&self.text);
+                    on_change(label.get_text());
                 }
             }
             InputEvent::TextInput { character: c } => {
                 if !c.is_control() {
-                    self.text.push(c);
+                    let mut label = self.label.borrow_mut();
+                    label.modify_text(move |text| text.push(c));
                     if let Some(ref on_change) = self.on_change {
-                        on_change(&self.text);
+                        on_change(label.get_text());
                     }
                 }
             }
@@ -1011,17 +1062,13 @@ impl Widget for Textbox {
     }
 
     fn display(&self, input_state: InputState) -> DisplayList {
-        let color = [0.1, 0.15, 0.2, 1.0];
-
-        let (width, height) = self.get_size();
-        let glyphs = layout_label(&*self.font, self.scale, 0.0, 0.0, &self.text);
-
         let mut list = DisplayList::new();
 
+        let color = [0.1, 0.15, 0.2, 1.0];
+        let (width, height) = self.get_size();
         list.rect(Rect { x: 0.0, y: 0.0, w: width.max(40.0), h: height, color: color });
-        for glyph in glyphs.iter() {
-            list.glyph(glyph.standalone());
-        }
+
+        list.merge(self.label.borrow().display(input_state));
 
         list
     }
@@ -1118,62 +1165,6 @@ impl Widget for IntegerInput {
     }
 }
 
-
-fn get_label_size<'a>(font: &'a Font,
-                      scale: Scale,
-                      text: &str) -> (f32, f32) {
-    use unicode_normalization::UnicodeNormalization;
-    let v_metrics = font.v_metrics(scale);
-    let height = v_metrics.ascent - v_metrics.descent;
-    let mut width = 0.0;
-    let mut last_glyph_id = None;
-    for c in text.nfc() {
-        if c.is_control() {
-            continue;
-        }
-        let base_glyph = if let Some(glyph) = font.glyph(c) {
-            glyph
-        } else {
-            continue;
-        };
-        if let Some(id) = last_glyph_id.take() {
-            width += font.pair_kerning(scale, id, base_glyph.id());
-        }
-        last_glyph_id = Some(base_glyph.id());
-        width += base_glyph.scaled(scale).h_metrics().advance_width;
-    }
-    (width, height)
-}
-
-fn layout_label<'a>(font: &'a Font,
-                    scale: Scale,
-                    x: f32,
-                    y: f32,
-                    text: &str) -> Vec<PositionedGlyph<'static>> {
-    use unicode_normalization::UnicodeNormalization;
-    let mut result = Vec::new();
-    let v_metrics = font.v_metrics(scale);
-    let mut caret = point(x, y + v_metrics.ascent);
-    let mut last_glyph_id = None;
-    for c in text.nfc() {
-        if c.is_control() {
-            continue;
-        }
-        let base_glyph = if let Some(glyph) = font.glyph(c) {
-            glyph
-        } else {
-            continue;
-        };
-        if let Some(id) = last_glyph_id.take() {
-            caret.x += font.pair_kerning(scale, id, base_glyph.id());
-        }
-        last_glyph_id = Some(base_glyph.id());
-        let glyph = base_glyph.scaled(scale).positioned(caret);
-        caret.x += glyph.unpositioned().h_metrics().advance_width;
-        result.push(glyph.standalone());
-    }
-    result
-}
 
 fn layout_paragraph<'a>(font: &'a Font,
                         scale: Scale,
