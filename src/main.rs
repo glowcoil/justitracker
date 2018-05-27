@@ -88,8 +88,8 @@ fn main() {
     let bpm_label = Container::new(Label::new("bpm:", font.clone()));
     let bpm = IntegerInput::new(120, font.clone());
     let controls: Vec<WidgetRef> = vec![play_button, stop_button, bpm_label, bpm];
-    let controls_row = Row::new(controls);
-    controls_row.borrow_mut().get_style().v_align = VAlign::Center;
+    let controls_row = Flex::row(controls);
+    controls_row.borrow_mut().get_style().cross_align = Align::Center;
     root.push(controls_row);
 
     let mut note_grid = vec![Vec::with_capacity(8); 8];
@@ -122,18 +122,18 @@ fn main() {
                 factor_grid[i][j].push(factor.clone());
                 factors.push(factor);
             }
-            let note = Row::new(factors);
+            let note = Flex::row(factors);
             note.borrow_mut().get_style().max_width = Some(80.0);
             note_grid[i].push(note.clone());
             track.push(note);
         }
-        columns.push(Column::new(track));
+        columns.push(Flex::col(track));
     }
-    let grid = Row::new(columns);
+    let grid = Flex::row(columns);
     grid.borrow_mut().get_style().spacing = 2.0;
     root.push(grid);
 
-    ui.make_root(Column::new(root));
+    ui.make_root(Flex::col(root));
 
     note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
 

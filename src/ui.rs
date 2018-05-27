@@ -310,14 +310,14 @@ impl Container {
 
         let (width, height) = self.get_size_from_child_size(child_width, child_height);
         let x_offset = match self.style.h_align {
-            HAlign::Left => self.style.padding,
-            HAlign::Center => width / 2.0 - child_width / 2.0,
-            HAlign::Right => width - self.style.padding - child_width,
+            Align::Beginning => self.style.padding,
+            Align::Center => width / 2.0 - child_width / 2.0,
+            Align::End => width - self.style.padding - child_width,
         };
         let y_offset = match self.style.v_align {
-            VAlign::Top => self.style.padding,
-            VAlign::Center => height / 2.0 - child_height / 2.0,
-            VAlign::Bottom => height - self.style.padding - child_height,
+            Align::Beginning => self.style.padding,
+            Align::Center => height / 2.0 - child_height / 2.0,
+            Align::End => height - self.style.padding - child_height,
         };
 
         ((x_offset, y_offset), (width, height))
@@ -370,15 +370,14 @@ pub struct ContainerStyle {
     pub max_width: Option<f32>,
     pub min_height: Option<f32>,
     pub max_height: Option<f32>,
-    pub h_align: HAlign,
-    pub v_align: VAlign,
+    pub h_align: Align,
+    pub v_align: Align,
     pub h_fill: bool,
     pub v_fill: bool,
     pub background_color: [f32; 4],
 }
 
-pub enum HAlign { Left, Center, Right }
-pub enum VAlign { Top, Center, Bottom }
+pub enum Align { Beginning, Center, End }
 
 impl Default for ContainerStyle {
     fn default() -> ContainerStyle {
@@ -388,8 +387,8 @@ impl Default for ContainerStyle {
             max_width: None,
             min_height: None,
             max_height: None,
-            h_align: HAlign::Left,
-            v_align: VAlign::Top,
+            h_align: Align::Beginning,
+            v_align: Align::Beginning,
             h_fill: false,
             v_fill: false,
             background_color: [0.0, 0.0, 0.0, 0.0],
@@ -398,23 +397,31 @@ impl Default for ContainerStyle {
 }
 
 
-pub struct Row {
+pub struct Flex {
     children: Vec<WidgetRef>,
-    style: RowStyle,
+    style: FlexStyle,
     container_width: Option<f32>,
     container_height: Option<f32>,
 }
 
-impl Row {
-    pub fn new(children: Vec<WidgetRef>) -> Rc<RefCell<Row>> {
-        Rc::new(RefCell::new(Row { children: children, style: Default::default(), container_width: None, container_height: None }))
+impl Flex {
+    pub fn new(children: Vec<WidgetRef>, axis: FlexAxis) -> Rc<RefCell<Flex>> {
+        Rc::new(RefCell::new(Flex { children: children, style: FlexStyle { axis: axis, ..Default::default() }, container_width: None, container_height: None }))
+    }
+
+    pub fn row(children: Vec<WidgetRef>) -> Rc<RefCell<Flex>> {
+        Flex::new(children, FlexAxis::Horizontal)
+    }
+
+    pub fn col(children: Vec<WidgetRef>) -> Rc<RefCell<Flex>> {
+        Flex::new(children, FlexAxis::Vertical)
     }
 
     pub fn get_child(&self, i: usize) -> WidgetRef {
         self.children[i].clone()
     }
 
-    pub fn get_style(&mut self) -> &mut RowStyle {
+    pub fn get_style(&mut self) -> &mut FlexStyle {
         &mut self.style
     }
 
@@ -428,107 +435,128 @@ impl Row {
         (max_width, max_height)
     }
 
-    fn get_widths_from_child_widths(&self, child_widths: &Vec<f32>, max_width: Option<f32>) -> Vec<f32> {
-        let mut container_widths: Vec<f32> = child_widths.clone();
-        let children_width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-        let width = self.get_width_from_children_width(children_width, max_width);
-        let extra_space = width - children_width - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
-        match self.style.h_fill {
+    fn get_length_from_child_lengths(&self, child_lengths: &Vec<f32>, max_length: Option<f32>) -> Vec<f32> {
+        let mut container_lengths: Vec<f32> = child_lengths.clone();
+        let children_length = container_lengths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let length = self.get_length_from_children_length(children_length, max_length);
+        let extra_space = length - children_length - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
+        match self.style.main_fill {
             Grow::None => {}
             Grow::Equal => {
                 let count = self.children.len() as f32;
-                for child_width in container_widths.iter_mut() {
-                    *child_width += extra_space / count;
+                for child_length in container_lengths.iter_mut() {
+                    *child_length += extra_space / count;
                 }
             }
             Grow::Ratio(ref amounts) => {
                 let total: f32 = amounts.iter().sum();
-                for (i, child_width) in container_widths.iter_mut().enumerate() {
-                    *child_width += (amounts[i] / total) * extra_space;
+                for (i, child_length) in container_lengths.iter_mut().enumerate() {
+                    *child_length += (amounts[i] / total) * extra_space;
                 }
             }
         }
-        container_widths
+        container_lengths
     }
 
-    fn get_width_from_children_width(&self, children_width: f32, max_width: Option<f32>) -> f32 {
-        let width = if max_width.is_some() && self.style.h_fill != Grow::None {
-            max_width.unwrap()
+    fn get_length_from_children_length(&self, children_length: f32, max_length: Option<f32>) -> f32 {
+        let length = if max_length.is_some() && self.style.main_fill != Grow::None {
+            max_length.unwrap()
         } else {
-            let contents_width = children_width + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-            self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width))
+            let contents_length = children_length + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+            self.main_axis((self.style.min_width, self.style.min_height)).map_or(contents_length, |min_length| min_length.max(contents_length))
         };
-        width
+        length
     }
 
-    fn get_height_from_child_heights(&self, child_heights: &Vec<f32>, max_height: Option<f32>) -> f32 {
-        let height = if max_height.is_some() && self.style.v_fill {
-            max_height.unwrap()
+    fn get_cross_length_from_child_cross_lengths(&self, child_cross_lengths: &Vec<f32>, max_cross_length: Option<f32>) -> f32 {
+        let cross_length = if max_cross_length.is_some() && self.style.cross_fill {
+            max_cross_length.unwrap()
         } else {
-            let mut contents_height: f32 = 0.0;
-            for child_height in child_heights {
-                contents_height = contents_height.max(*child_height);
+            let mut contents_cross_length: f32 = 0.0;
+            for child_cross_length in child_cross_lengths {
+                contents_cross_length = contents_cross_length.max(*child_cross_length);
             }
-            self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height))
+            self.cross_axis((self.style.min_width, self.style.min_height)).map_or(contents_cross_length, |min_cross_length| min_cross_length.max(contents_cross_length))
         };
-        height
+        cross_length
     }
 
     fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<(f32, f32)>, (f32, f32)) {
-        let (max_width, max_height) = self.get_max_size();
+        let max_size = self.get_max_size();
         let child_sizes: Vec<(f32, f32)> = self.children.iter().map(|child| child.borrow().get_size()).collect();
-        let container_widths = self.get_widths_from_child_widths(&child_sizes.iter().map(|child_size| child_size.0).collect(), max_width);
-        let children_width = container_widths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-        let width = self.get_width_from_children_width(children_width, max_width);
-        let height = self.get_height_from_child_heights(&child_sizes.iter().map(|child_size| child_size.1).collect(), max_height);
+        let container_lengths = self.get_length_from_child_lengths(&child_sizes.iter().map(|child_size| self.main_axis(*child_size)).collect(), self.main_axis(max_size));
+        let children_length = container_lengths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
+        let length = self.get_length_from_children_length(children_length, self.main_axis(max_size));
+        let cross_length = self.get_cross_length_from_child_cross_lengths(&child_sizes.iter().map(|child_size| self.cross_axis(*child_size)).collect(), self.cross_axis(max_size));
 
         let mut child_offsets = Vec::with_capacity(self.children.len());
-        let mut x_offset = self.style.padding;
+        let mut offset = self.style.padding;
         for i in 0..self.children.len() {
-            let (child_width, child_height) = child_sizes[i];
-            let container_width = container_widths[i];
+            let child_size = child_sizes[i];
+            let container_length = container_lengths[i];
 
-            let x = x_offset + match self.style.h_align {
-                HAlign::Left => 0.0,
-                HAlign::Center => container_width / 2.0 - child_width / 2.0,
-                HAlign::Right => container_width - child_width,
+            let main = offset + match self.style.main_align {
+                Align::Beginning => 0.0,
+                Align::Center => container_length / 2.0 - self.main_axis(child_size) / 2.0,
+                Align::End => container_length - self.main_axis(child_size),
             };
-            let y = match self.style.v_align {
-                VAlign::Top => self.style.padding,
-                VAlign::Center => height / 2.0 - child_height / 2.0,
-                VAlign::Bottom => height - self.style.padding - child_height,
+            let cross = match self.style.cross_align {
+                Align::Beginning => self.style.padding,
+                Align::Center => cross_length / 2.0 - self.cross_axis(child_size) / 2.0,
+                Align::End => cross_length - self.style.padding - self.cross_axis(child_size),
             };
-            child_offsets.push((x, y));
+            child_offsets.push(self.main_cross_to_x_y((main, cross)));
 
-            x_offset += container_width + self.style.spacing;
+            offset += container_length + self.style.spacing;
         }
 
-        (child_offsets, child_sizes, (width, height))
+        (child_offsets, child_sizes, self.main_cross_to_x_y((length, cross_length)))
+    }
+
+    fn main_axis<T>(&self, size: (T, T)) -> T {
+        match self.style.axis {
+            FlexAxis::Horizontal => size.0,
+            FlexAxis::Vertical => size.1,
+        }
+    }
+
+    fn cross_axis<T>(&self, size: (T, T)) -> T {
+        match self.style.axis {
+            FlexAxis::Horizontal => size.1,
+            FlexAxis::Vertical => size.0,
+        }
+    }
+
+    fn main_cross_to_x_y<T>(&self, main_cross: (T, T)) -> (T, T) {
+        match self.style.axis {
+            FlexAxis::Horizontal => (main_cross.0, main_cross.1),
+            FlexAxis::Vertical => (main_cross.1, main_cross.0),
+        }
     }
 }
 
-impl Widget for Row {
+impl Widget for Flex {
     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
         self.container_width = width;
         self.container_height = height;
-        let (max_width, max_height) = self.get_max_size();
-        let min_child_widths: Vec<f32> = self.children.iter().map(|child| child.borrow().get_min_size().0).collect();
-        let container_widths = self.get_widths_from_child_widths(&min_child_widths, max_width);
+        let max_size = self.get_max_size();
+        let min_child_lengths: Vec<f32> = self.children.iter().map(|child| self.main_axis(child.borrow().get_min_size())).collect();
+        let container_lengths = self.get_length_from_child_lengths(&min_child_lengths, self.main_axis(max_size));
         for (i, child) in self.children.iter().enumerate() {
-            child.borrow_mut().set_container_size(Some(container_widths[i]), max_height);
+            let (container_width, container_height) = self.main_cross_to_x_y((Some(container_lengths[i]), self.cross_axis(max_size)));
+            child.borrow_mut().set_container_size(container_width, container_height);
         }
     }
 
     fn get_min_size(&self) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
+        let mut main: f32 = 0.0;
+        let mut cross: f32 = 0.0;
         for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_min_size();
-            width += child_width + self.style.spacing;
-            height = height.max(child_height);
+            let child_min_size = child.borrow().get_min_size();
+            main += self.main_axis(child_min_size) + self.style.spacing;
+            cross = cross.max(self.cross_axis(child_min_size));
         }
-        let contents_width = width + 2.0 * self.style.padding;
-        let contents_height = height + 2.0 * self.style.padding;
+        let (contents_width, contents_height) = self.main_cross_to_x_y((main + 2.0 * self.style.padding, cross + 2.0 * self.style.padding));
         let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
         let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
         (min_width, min_height)
@@ -577,17 +605,18 @@ impl Widget for Row {
     }
 }
 
-pub struct RowStyle {
+pub struct FlexStyle {
+    pub axis: FlexAxis,
     pub padding: f32,
     pub spacing: f32,
     pub min_width: Option<f32>,
     pub max_width: Option<f32>,
     pub min_height: Option<f32>,
     pub max_height: Option<f32>,
-    pub h_align: HAlign,
-    pub v_align: VAlign,
-    pub h_fill: Grow,
-    pub v_fill: bool,
+    pub main_align: Align,
+    pub cross_align: Align,
+    pub main_fill: Grow,
+    pub cross_fill: bool,
     pub background_color: [f32; 4],
 }
 
@@ -598,242 +627,26 @@ pub enum Grow {
     Ratio(Vec<f32>),
 }
 
-impl Default for RowStyle {
-    fn default() -> RowStyle {
-        RowStyle {
+#[derive(Clone, PartialEq)]
+pub enum FlexAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl Default for FlexStyle {
+    fn default() -> FlexStyle {
+        FlexStyle {
+            axis: FlexAxis::Horizontal,
             padding: 0.0,
             spacing: 0.0,
             min_width: None,
             max_width: None,
             min_height: None,
             max_height: None,
-            h_align: HAlign::Left,
-            v_align: VAlign::Top,
-            h_fill: Grow::None,
-            v_fill: false,
-            background_color: [0.0, 0.0, 0.0, 0.0],
-        }
-    }
-}
-
-
-pub struct Column {
-    children: Vec<WidgetRef>,
-    style: ColumnStyle,
-    container_width: Option<f32>,
-    container_height: Option<f32>,
-}
-
-impl Column {
-    pub fn new(children: Vec<WidgetRef>) -> Rc<RefCell<Column>> {
-        Rc::new(RefCell::new(Column { children: children, style: Default::default(), container_width: None, container_height: None }))
-    }
-
-    pub fn get_child(&self, i: usize) -> WidgetRef {
-        self.children[i].clone()
-    }
-
-    pub fn get_style(&mut self) -> &mut ColumnStyle {
-        &mut self.style
-    }
-
-    fn get_max_size(&self) -> (Option<f32>, Option<f32>) {
-        let max_width = self.container_width
-            .and_then(|container_width| self.style.max_width.and_then(|max_width| Some(container_width.min(max_width))))
-            .or(self.container_width).or(self.style.max_width);
-        let max_height = self.container_height
-            .and_then(|container_height| self.style.max_height.and_then(|max_height| Some(container_height.min(max_height))))
-            .or(self.container_height).or(self.style.max_height);
-        (max_width, max_height)
-    }
-
-    fn get_width_from_child_widths(&self, child_widths: &Vec<f32>, max_width: Option<f32>) -> f32 {
-        let width = if max_width.is_some() && self.style.h_fill {
-            max_width.unwrap()
-        } else {
-            let mut contents_width: f32 = 0.0;
-            for child_width in child_widths {
-                contents_width = contents_width.max(*child_width);
-            }
-            self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width))
-        };
-        width
-    }
-
-    fn get_heights_from_child_heights(&self, child_heights: &Vec<f32>, max_height: Option<f32>) -> Vec<f32> {
-        let mut container_heights: Vec<f32> = child_heights.clone();
-        let children_height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-        let height = self.get_height_from_children_height(children_height, max_height);
-        let extra_space = height - children_height - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
-        match self.style.v_fill {
-            Grow::None => {}
-            Grow::Equal => {
-                let count = self.children.len() as f32;
-                for child_height in container_heights.iter_mut() {
-                    *child_height += extra_space / count;
-                }
-            }
-            Grow::Ratio(ref amounts) => {
-                let total: f32 = amounts.iter().sum();
-                for (i, child_height) in container_heights.iter_mut().enumerate() {
-                    *child_height += (amounts[i] / total) * extra_space;
-                }
-            }
-        }
-        container_heights
-    }
-
-    fn get_height_from_children_height(&self, children_height: f32, max_height: Option<f32>) -> f32 {
-        let height = if max_height.is_some() && self.style.v_fill != Grow::None {
-            max_height.unwrap()
-        } else {
-            let contents_height = children_height + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-            self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height))
-        };
-        height
-    }
-
-    fn get_child_sizes(&self) -> (Vec<f32>, Vec<f32>) {
-        let mut child_widths = Vec::with_capacity(self.children.len());
-        let mut child_heights = Vec::with_capacity(self.children.len());
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_size();
-            child_widths.push(child_width);
-            child_heights.push(child_height)
-        }
-        (child_widths, child_heights)
-    }
-
-    fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<(f32, f32)>, (f32, f32)) {
-        let (max_width, max_height) = self.get_max_size();
-        let child_sizes: Vec<(f32, f32)> = self.children.iter().map(|child| child.borrow().get_size()).collect();
-        let container_heights = self.get_heights_from_child_heights(&child_sizes.iter().map(|child_size| child_size.1).collect(), max_height);
-        let children_height = container_heights.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-        let width = self.get_width_from_child_widths(&child_sizes.iter().map(|child_size| child_size.0).collect(), max_width);
-        let height = self.get_height_from_children_height(children_height, max_height);
-
-        let mut child_offsets = Vec::with_capacity(self.children.len());
-        let mut y_offset = self.style.padding;
-        for i in 0..self.children.len() {
-            let (child_width, child_height) = child_sizes[i];
-            let container_height = container_heights[i];
-
-            let x = match self.style.h_align {
-                HAlign::Left => self.style.padding,
-                HAlign::Center => width / 2.0 - child_width / 2.0,
-                HAlign::Right => width - self.style.padding - child_width,
-            };
-            let y = y_offset + match self.style.v_align {
-                VAlign::Top => 0.0,
-                VAlign::Center => container_height / 2.0 - child_height / 2.0,
-                VAlign::Bottom => container_height - child_height,
-            };
-            child_offsets.push((x, y));
-
-            y_offset += container_height + self.style.spacing;
-        }
-
-        (child_offsets, child_sizes, (width, height))
-    }
-}
-
-impl Widget for Column {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.container_width = width;
-        self.container_height = height;
-        let (max_width, max_height) = self.get_max_size();
-        let min_child_heights: Vec<f32> = self.children.iter().map(|child| child.borrow().get_min_size().0).collect();
-        let container_heights = self.get_heights_from_child_heights(&min_child_heights, max_height);
-        for (i, child) in self.children.iter().enumerate() {
-            child.borrow_mut().set_container_size(max_width, Some(container_heights[i]));
-        }
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in self.children.iter() {
-            let (child_width, child_height) = child.borrow().get_min_size();
-            width = width.max(child_width);
-            height += child_height + self.style.spacing;
-        }
-        let contents_width = width + 2.0 * self.style.padding;
-        let contents_height = height + 2.0 * self.style.padding;
-        let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
-        let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
-        (min_width, min_height)
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        let (_, _, (width, height)) = self.get_layout();
-        (width, height)
-    }
-
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        let (child_offsets, child_sizes, _) = self.get_layout();
-
-        match ev {
-            InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
-                let mouse_position = input_state.mouse_drag_origin.unwrap_or(input_state.mouse_position);
-
-                for (i, child) in self.children.iter().enumerate() {
-                    let (x, y) = child_offsets[i];
-                    if x <= mouse_position.x && mouse_position.x < x + child_sizes[i].0 && y <= mouse_position.y && mouse_position.y < y + child_sizes[i].1 {
-                        let mut response = child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-                        response.responder = response.responder.or_else(|| Some(child.clone()));
-                        return response;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        Default::default()
-    }
-
-    fn display(&self, input_state: InputState) -> DisplayList {
-        let (child_offsets, child_sizes, (width, height)) = self.get_layout();
-
-        let mut list = DisplayList::new();
-        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
-        for (i, child) in self.children.iter().enumerate() {
-            let (x, y) = child_offsets[i];
-            let mut child_list = child.borrow().display(input_state.translate(Point { x: -x, y: -y }));
-            child_list.translate(Point { x: x, y: y });
-            list.merge(child_list);
-        }
-
-        list
-    }
-}
-
-pub struct ColumnStyle {
-    pub padding: f32,
-    pub spacing: f32,
-    pub min_width: Option<f32>,
-    pub max_width: Option<f32>,
-    pub min_height: Option<f32>,
-    pub max_height: Option<f32>,
-    pub h_align: HAlign,
-    pub v_align: VAlign,
-    pub h_fill: bool,
-    pub v_fill: Grow,
-    pub background_color: [f32; 4],
-}
-
-impl Default for ColumnStyle {
-    fn default() -> ColumnStyle {
-        ColumnStyle {
-            padding: 0.0,
-            spacing: 0.0,
-            min_width: None,
-            max_width: None,
-            min_height: None,
-            max_height: None,
-            h_align: HAlign::Left,
-            v_align: VAlign::Top,
-            h_fill: false,
-            v_fill: Grow::None,
+            main_align: Align::Beginning,
+            cross_align: Align::Beginning,
+            main_fill: Grow::None,
+            cross_fill: false,
             background_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
