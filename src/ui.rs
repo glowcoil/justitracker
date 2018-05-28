@@ -91,7 +91,7 @@ pub trait Widget {
     fn get_min_size(&self) -> (f32, f32);
     fn get_size(&self) -> (f32, f32);
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse;
-    fn display(&self, input_state: InputState) -> DisplayList;
+    fn display(&self, input_state: InputState, list: &mut DisplayList);
 }
 
 impl UI {
@@ -240,7 +240,9 @@ impl UI {
     }
 
     pub fn display(&self) -> DisplayList {
-        self.root.borrow().display(self.input_state)
+        let mut list = DisplayList::new();
+        self.root.borrow().display(self.input_state, &mut list);
+        list
     }
 }
 
@@ -258,7 +260,7 @@ impl Widget for Empty {
     fn get_min_size(&self) -> (f32, f32) { (0.0, 0.0) }
     fn get_size(&self) -> (f32, f32) { (0.0, 0.0) }
     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse { Default::default() }
-    fn display(&self, input_state: InputState) -> DisplayList { DisplayList::new() }
+    fn display(&self, input_state: InputState, list: &mut DisplayList) { }
 }
 
 
@@ -353,14 +355,12 @@ impl Widget for Container {
         response
     }
 
-    fn display(&self, input_state: InputState) -> DisplayList {
+    fn display(&self, input_state: InputState, list: &mut DisplayList) {
         let ((x, y), (width, height)) = self.get_layout();
-        let mut list = DisplayList::new();
         list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
-        let mut child_list = self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }));
-        child_list.translate(Point { x: x, y: y });
-        list.merge(child_list);
-        list
+        list.push_translate(Point { x: x, y: y });
+        self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }), list);
+        list.pop_translate();
     }
 }
 
@@ -589,19 +589,16 @@ impl Widget for Flex {
         Default::default()
     }
 
-    fn display(&self, input_state: InputState) -> DisplayList {
+    fn display(&self, input_state: InputState, list: &mut DisplayList) {
         let (child_offsets, child_sizes, (width, height)) = self.get_layout();
 
-        let mut list = DisplayList::new();
         list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
         for (i, child) in self.children.iter().enumerate() {
             let (x, y) = child_offsets[i];
-            let mut child_list = child.borrow().display(input_state.translate(Point { x: -x, y: -y }));
-            child_list.translate(Point { x: x, y: y });
-            list.merge(child_list);
+            list.push_translate(Point { x: x, y: y });
+            child.borrow().display(input_state.translate(Point { x: -x, y: -y }), list);
+            list.pop_translate();
         }
-
-        list
     }
 }
 
@@ -701,7 +698,7 @@ impl Widget for Button {
         Default::default()
     }
 
-    fn display(&self, input_state: InputState) -> DisplayList {
+    fn display(&self, input_state: InputState, list: &mut DisplayList) {
         let (width, height) = self.get_size();
 
         let mut color = [0.15, 0.18, 0.23, 1.0];
@@ -713,12 +710,8 @@ impl Widget for Button {
             color = [0.3, 0.4, 0.5, 1.0];
         }
 
-
-        let mut list = DisplayList::new();
         list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: color });
-        list.merge(self.contents.borrow().display(input_state));
-
-        list
+        self.contents.borrow().display(input_state, list);
     }
 }
 
@@ -811,12 +804,10 @@ impl Widget for Label {
         Default::default()
     }
 
-    fn display(&self, input_state: InputState) -> DisplayList {
-        let mut list = DisplayList::new();
+    fn display(&self, input_state: InputState, list: &mut DisplayList) {
         for glyph in self.glyphs.iter() {
             list.glyph(glyph.standalone());
         }
-        list
     }
 }
 
@@ -874,16 +865,12 @@ impl Widget for Textbox {
         Default::default()
     }
 
-    fn display(&self, input_state: InputState) -> DisplayList {
-        let mut list = DisplayList::new();
-
+    fn display(&self, input_state: InputState, list: &mut DisplayList) {
         let color = [0.1, 0.15, 0.2, 1.0];
         let (width, height) = self.get_size();
         list.rect(Rect { x: 0.0, y: 0.0, w: width.max(40.0), h: height, color: color });
 
-        list.merge(self.label.borrow().display(input_state));
-
-        list
+        self.label.borrow().display(input_state, list);
     }
 }
 
@@ -973,8 +960,8 @@ impl Widget for IntegerInput {
         Default::default()
     }
 
-    fn display(&self, input_state: InputState) -> DisplayList {
-        self.container.borrow().display(input_state)
+    fn display(&self, input_state: InputState, list: &mut DisplayList) {
+        self.container.borrow().display(input_state, list);
     }
 }
 

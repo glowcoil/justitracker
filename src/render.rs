@@ -14,6 +14,7 @@ use ui::Point;
 pub struct DisplayList {
     rects: Vec<Rect>,
     glyphs: Vec<PositionedGlyph<'static>>,
+    stack: Vec<Point>,
 }
 
 impl DisplayList {
@@ -21,33 +22,35 @@ impl DisplayList {
         DisplayList {
             rects: vec![],
             glyphs: vec![],
+            stack: vec![],
         }
     }
 
-    pub fn merge(&mut self, other: DisplayList) {
-        self.rects.extend(other.rects);
-        self.glyphs.extend(other.glyphs);
+    pub fn push_translate(&mut self, delta: Point) {
+        self.stack.push(delta);
     }
 
-    pub fn translate(&mut self, delta: Point) {
-        for rect in self.rects.iter_mut() {
-            rect.x += delta.x;
-            rect.y += delta.y;
-        }
-
-        for glyph in self.glyphs.iter_mut() {
-            let old_glyph = glyph.clone();
-            let position = old_glyph.position();
-            *glyph = old_glyph.into_unpositioned().positioned(position + vector(delta.x, delta.y));
-        }
+    pub fn pop_translate(&mut self) {
+        self.stack.pop();
     }
 
     pub fn rect(&mut self, rect: Rect) {
+        let mut rect = rect;
+        for delta in self.stack.iter().rev() {
+            rect.x += delta.x;
+            rect.y += delta.y;
+        }
         self.rects.push(rect);
     }
 
     pub fn glyph(&mut self, glyph: PositionedGlyph<'static>) {
-        self.glyphs.push(glyph);
+        let old_glyph = glyph.clone();
+        let position = old_glyph.position();
+        let mut position = Point { x: position.x, y: position.y };
+        for delta in self.stack.iter().rev() {
+            position += *delta;
+        }
+        self.glyphs.push(old_glyph.into_unpositioned().positioned(point(position.x, position.y)));
     }
 }
 
