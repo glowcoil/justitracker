@@ -105,7 +105,9 @@ fn main() {
                 messages.borrow_mut().push_back(Message::LoadSample(i));
             }
         });
-        let mut track: Vec<WidgetRef> = vec![load_sample_button];
+        let delete_track_button = Button::with_text("del", font.clone());
+        let track_buttons = Flex::row(vec![load_sample_button, delete_track_button]);
+        let mut track: Vec<WidgetRef> = vec![track_buttons];
         for j in 0..8 {
             let mut factors: Vec<WidgetRef> = vec![];
             for k in 0..4 {
@@ -129,6 +131,7 @@ fn main() {
         }
         columns.push(Flex::col(track));
     }
+    columns.push(Button::with_text("add", font.clone()));
     let grid = Flex::row(columns);
     grid.borrow_mut().get_style().spacing = 2.0;
     root.push(grid);
@@ -160,7 +163,7 @@ fn main() {
                                             }
                                         }
                                         glutin::VirtualKeyCode::Down => {
-                                            if cursor.1 < 7 {
+                                            if cursor.1 < note_grid[0].len() - 1 {
                                                 note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.0, 0.0, 0.0, 0.0];
                                                 cursor.1 += 1;
                                                 note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
@@ -174,7 +177,7 @@ fn main() {
                                             }
                                         }
                                         glutin::VirtualKeyCode::Right => {
-                                            if cursor.0 < 7 {
+                                            if cursor.0 < note_grid.len() - 1 {
                                                 note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.0, 0.0, 0.0, 0.0];
                                                 cursor.0 += 1;
                                                 note_grid[cursor.0][cursor.1].borrow_mut().get_style().background_color = [0.02, 0.2, 0.6, 1.0];
