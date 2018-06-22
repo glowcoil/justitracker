@@ -44,13 +44,16 @@ impl DisplayList {
     }
 
     pub fn glyph(&mut self, glyph: PositionedGlyph<'static>) {
-        let old_glyph = glyph.clone();
-        let position = old_glyph.position();
-        let mut position = Point { x: position.x, y: position.y };
-        for delta in self.stack.iter().rev() {
-            position += *delta;
+        let mut glyph = glyph.clone();
+        if self.stack.len() > 0 {
+            let position = glyph.position();
+            let mut position = Point { x: position.x, y: position.y };
+            for delta in self.stack.iter().rev() {
+                position += *delta;
+            }
+            glyph = glyph.into_unpositioned().positioned(point(position.x, position.y))
         }
-        self.glyphs.push(old_glyph.into_unpositioned().positioned(point(position.x, position.y)));
+        self.glyphs.push(glyph);
     }
 }
 

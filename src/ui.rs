@@ -1,105 +1,104 @@
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+
+use anymap::AnyMap;
+use std::any::{Any, TypeId};
+use std::marker::PhantomData;
+use std::mem;
+use std::borrow::BorrowMut;
+
+use std::f32;
 
 use glium::glutin;
 use rusttype::{Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
+pub type ElementRef = usize;
+
+type ClassRef = usize;
+
+#[derive(Copy, Clone)]
+pub struct ResourceRef<R> {
+    index: Option<usize>,
+    resource_type: PhantomData<R>,
+}
+
+impl<R: 'static> ResourceRef<R> {
+    fn new(index: usize) -> ResourceRef<R> { ResourceRef { index: Some(index), resource_type: PhantomData } }
+    fn null() -> ResourceRef<R> { ResourceRef { index: None, resource_type: PhantomData } }
+}
+
+pub trait Element {
+    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox;
+    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox;
+    fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {}
+
+    fn type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
+}
+
 pub struct UI {
     width: f32,
     height: f32,
-    root: WidgetRef,
+
+    next_id: usize,
+    elements: HashMap<ElementRef, Box<Element>>,
+    root: ElementRef,
+    focus: Option<ElementRef>,
+    dragging: Option<ElementRef>,
+    parents: HashMap<ElementRef, ElementRef>,
+    children: HashMap<ElementRef, Vec<ElementRef>>,
+    slots: HashMap<ElementRef, ElementRef>,
+    layout: HashMap<ElementRef, BoundingBox>,
+    next_class_id: usize,
+    classes: HashMap<ClassRef, HashSet<ElementRef>>,
+    element_classes: HashMap<ElementRef, Vec<ClassRef>>,
+
+    receivers: HashMap<ElementRef, HashMap<TypeId, fn(&mut (), Context<()>, &())>>,
+    listeners: HashMap<ElementRef, HashMap<TypeId, HashMap<ElementRef, fn(&mut (), Context<()>, &())>>>,
+    listening: HashMap<ElementRef, HashMap<ElementRef, HashSet<TypeId>>>,
+
+    global_styles: AnyMap,
+    global_element_styles: HashMap<TypeId, AnyMap>,
+    class_styles: HashMap<ClassRef, AnyMap>,
+    element_styles: HashMap<ElementRef, AnyMap>,
+
+    next_resource_id: usize,
+    resources: AnyMap,
 
     input_state: InputState,
-    keyboard_focus: Option<WidgetRef>,
-    mouse_focus: Option<WidgetRef>,
     mouse_position_captured: bool,
-}
-
-#[derive(Copy, Clone)]
-pub enum InputEvent {
-    CursorMoved { position: Point },
-    MousePress { button: MouseButton },
-    MouseRelease { button: MouseButton },
-    MouseScroll { delta: f32 },
-    KeyPress { button: KeyboardButton },
-    KeyRelease { button: KeyboardButton },
-    TextInput { character: char },
-    LostKeyboardFocus,
-}
-
-#[derive(Copy, Clone)]
-pub struct UIEventResponse {
-    pub set_mouse_position: Option<(f32, f32)>,
-    pub mouse_cursor: MouseCursor,
-}
-
-impl Default for UIEventResponse {
-    fn default() -> UIEventResponse {
-        UIEventResponse {
-            set_mouse_position: None,
-            mouse_cursor: MouseCursor::Default,
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct InputState {
-    mouse_position: Point,
-    mouse_drag_origin: Option<Point>,
-    mouse_left_pressed: bool,
-    mouse_middle_pressed: bool,
-    mouse_right_pressed: bool,
-}
-
-impl InputState {
-    pub fn translate(self, delta: Point) -> InputState {
-        let mut input_state = self;
-        input_state.mouse_position = input_state.mouse_position + delta;
-        if let Some(ref mut mouse_drag_origin) = input_state.mouse_drag_origin {
-            *mouse_drag_origin = *mouse_drag_origin + delta;
-        }
-        input_state
-    }
-}
-
-pub struct EventResponse {
-    responder: Option<WidgetRef>,
-    capture_keyboard: bool,
-    capture_mouse: bool,
-    capture_mouse_position: bool,
-    mouse_cursor: MouseCursor,
-}
-
-impl Default for EventResponse {
-    fn default() -> EventResponse {
-        EventResponse {
-            responder: None,
-            capture_keyboard: false,
-            capture_mouse: false,
-            capture_mouse_position: false,
-            mouse_cursor: MouseCursor::Default,
-        }
-    }
-}
-
-pub type WidgetRef = Rc<RefCell<Widget>>;
-
-pub trait Widget {
-    fn set_container_size(&mut self, w: Option<f32>, h: Option<f32>);
-    fn get_min_size(&self) -> (f32, f32);
-    fn get_size(&self) -> (f32, f32);
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse;
-    fn display(&self, input_state: InputState, list: &mut DisplayList);
 }
 
 impl UI {
     pub fn new(width: f32, height: f32) -> UI {
-        UI {
+        let mut ui = UI {
             width: width,
             height: height,
-            root: Empty::new(),
+
+            next_id: 1,
+            elements: HashMap::new(),
+            root: 0,
+            focus: None,
+            dragging: None,
+            parents: HashMap::new(),
+            children: HashMap::new(),
+            slots: HashMap::new(),
+            layout: HashMap::new(),
+            next_class_id: 0,
+            classes: HashMap::new(),
+            element_classes: HashMap::new(),
+
+            receivers: HashMap::new(),
+            listeners: HashMap::new(),
+            listening: HashMap::new(),
+
+            global_styles: AnyMap::new(),
+            global_element_styles: HashMap::new(),
+            class_styles: HashMap::new(),
+            element_styles: HashMap::new(),
+
+            next_resource_id: 0,
+            resources: AnyMap::new(),
 
             input_state: InputState {
                 mouse_position: Point { x: -1.0, y: -1.0 },
@@ -107,44 +106,275 @@ impl UI {
                 mouse_left_pressed: false,
                 mouse_middle_pressed: false,
                 mouse_right_pressed: false,
+                modifiers: Default::default(),
             },
-            keyboard_focus: None,
-            mouse_focus: None,
             mouse_position_captured: false,
-        }
+        };
+
+        ui.hookup_element(0);
+        ui.setup_element_styles(0);
+        ui.elements.insert(0, Box::new(Stack));
+
+        ui
     }
 
-    pub fn get_min_size(&self) -> (f32, f32) {
-        self.root.borrow().get_min_size()
-    }
+    /* size */
 
     pub fn get_size(&self) -> (f32, f32) {
         (self.width, self.height)
     }
 
-    pub fn set_size(&mut self, width: f32, height: f32) {
+    pub fn resize(&mut self, width: f32, height: f32) {
         self.width = width;
         self.height = height;
-        self.root.borrow_mut().set_container_size(Some(self.width), Some(self.height));
     }
 
-    pub fn make_root(&mut self, root: WidgetRef) {
-        self.root = root;
-        self.root.borrow_mut().set_container_size(Some(self.width), Some(self.height));
+    /* element tree */
+
+    pub fn place_root<'a, E, I>(&'a mut self, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+        let root = self.root;
+
+        self.remove_element(root);
+
+        self.hookup_element(root);
+        self.setup_element_styles(root);
+        let element = install(Context::new(self, root));
+        self.elements.insert(root, Box::new(element));
+
+        root
     }
 
-    pub fn handle_event(&mut self, ev: InputEvent) -> UIEventResponse {
+    pub fn get_slot<'a>(&'a mut self, element: ElementRef) -> Slot<'a> {
+        let slot = *self.slots.get(&element).expect("element does not have a slot");
+        Slot::new(self, slot)
+    }
+
+    pub fn register_slot(&mut self, element: ElementRef, slot: ElementRef) {
+        self.slots.insert(element, slot);
+    }
+
+    fn add_child<E, I>(&mut self, parent: ElementRef, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+        let child_id = self.get_next_id();
+        self.hookup_element(child_id);
+        self.setup_element_styles(child_id);
+        self.children.get_mut(&parent).expect("invalid parent id").push(child_id);
+        self.parents.insert(child_id, parent);
+
+        let element = install(Context::new(self, child_id));
+        self.elements.insert(child_id, Box::new(element));
+
+
+        child_id
+    }
+
+    fn insert_child<E, I>(&mut self, parent: ElementRef, index: usize, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+        let child_id = self.get_next_id();
+        self.hookup_element(child_id);
+        self.setup_element_styles(child_id);
+        self.children.get_mut(&parent).expect("invalid parent id").insert(index, child_id);
+        self.parents.insert(child_id, parent);
+
+        let element = install(Context::new(self, child_id));
+        self.elements.insert(child_id, Box::new(element));
+
+        child_id
+    }
+
+    fn remove_child(&mut self, parent: ElementRef, index: usize) {
+        let child_id = self.children.get_mut(&parent).expect("invalid parent id").remove(index);
+        self.remove_element(child_id);
+    }
+
+    fn get_child(&self, parent: ElementRef, index: usize) -> Option<ElementRef> {
+        self.children.get(&parent).expect("invalid parent id").get(index).map(|child| *child)
+    }
+
+    fn get_next_id(&mut self) -> ElementRef {
+        let element_id = self.next_id;
+        self.next_id += 1;
+        element_id
+    }
+
+    fn remove_element(&mut self, id: usize) {
+        self.unhook_element(id);
+        self.remove_element_styles(id);
+    }
+
+    fn hookup_element(&mut self, element: usize) {
+        self.children.insert(element, Vec::new());
+        self.layout.insert(element, BoundingBox::new(0.0, 0.0, 0.0, 0.0));
+        self.receivers.insert(element, HashMap::new());
+        self.listeners.insert(element, HashMap::new());
+        self.listening.insert(element, HashMap::new());
+    }
+
+    fn setup_element_styles(&mut self, element: usize) {
+        self.element_classes.insert(element, Vec::new());
+        self.element_styles.insert(element, AnyMap::new());
+    }
+
+    fn unhook_element(&mut self, element: usize) {
+        self.elements.remove(&element);
+        self.layout.remove(&element);
+        self.receivers.remove(&element);
+        self.listeners.remove(&element);
+        let listening = self.listening.remove(&element).expect("invalid element id");
+        for (source, events) in listening {
+            let source = self.listeners.get_mut(&source).expect("invalid element id");
+            for event in events {
+                source.remove(&event);
+            }
+        }
+        let children = self.children.remove(&element).expect("invalid element id");
+        for child in children {
+            self.remove_element(child);
+        }
+    }
+
+    fn remove_element_styles(&mut self, element: usize) {
+        for class in self.element_classes.get(&element).expect("invalid element id") {
+            self.classes.get_mut(class).expect("invalid class id").remove(&element);
+        }
+        self.element_classes.remove(&element);
+        self.element_styles.remove(&element);
+    }
+
+    /* classes */
+
+    pub fn new_class(&mut self) -> ClassRef {
+        let class_id = self.next_class_id;
+        self.classes.insert(class_id, HashSet::new());
+        self.class_styles.insert(class_id, AnyMap::new());
+        self.next_class_id += 1;
+        class_id
+    }
+
+    pub fn delete_class(&mut self, class: ClassRef) {
+        for element in self.classes.get(&class).expect("invalid class id") {
+            self.element_classes.get_mut(&element).expect("invalid element id").retain(|c| *c != class);
+        }
+        self.classes.remove(&class);
+        self.class_styles.remove(&class);
+    }
+
+    pub fn add_class(&mut self, element: usize, class: ClassRef) {
+        self.classes.get_mut(&class).expect("invalid class id").insert(element);
+        self.element_classes.get_mut(&element).expect("invalid element id").push(class);
+    }
+
+    pub fn remove_class(&mut self, element: usize, class: ClassRef) {
+        self.classes.get_mut(&class).expect("invalid class id").remove(&element);
+        self.element_classes.get_mut(&element).expect("invalid element id").retain(|c| *c != class);
+    }
+
+    /* styles */
+
+    pub fn set_global_style<P: Patch>(&mut self, style: P::PatchType) {
+        self.global_styles.insert::<P::PatchType>(style);
+    }
+
+    pub fn unset_global_style<P: Patch>(&mut self) {
+        self.global_styles.remove::<P::PatchType>();
+    }
+
+    pub fn set_global_element_style<W: Element + 'static, P: Patch>(&mut self, style: P::PatchType) {
+        self.global_element_styles.entry(TypeId::of::<W>())
+            .or_insert_with(|| AnyMap::new())
+            .insert::<P::PatchType>(style);
+    }
+
+    pub fn unset_global_element_style<W: Element + 'static, P: Patch>(&mut self) {
+        if let Some(map) = self.global_element_styles.get_mut(&TypeId::of::<W>()) {
+            map.remove::<P::PatchType>();
+        }
+    }
+
+    pub fn set_class_style<P: Patch>(&mut self, class: ClassRef, style: P::PatchType) {
+        self.class_styles.get_mut(&class).expect("invalid class id").insert::<P::PatchType>(style);
+    }
+
+    pub fn unset_class_style<P: Patch>(&mut self, class: ClassRef) {
+        self.class_styles.get_mut(&class).expect("invalid class id").remove::<P::PatchType>();
+    }
+
+    pub fn set_element_style<P: Patch>(&mut self, element: usize, style: P::PatchType) {
+        self.element_styles.get_mut(&element).expect("invalid element id").insert::<P::PatchType>(style);
+    }
+
+    pub fn unset_element_style<P: Patch>(&mut self, element: usize) {
+        self.element_styles.get_mut(&element).expect("invalid element id").remove::<P::PatchType>();
+    }
+
+    /* resources */
+
+    pub fn add_resource<R: 'static>(&mut self, resource: R) -> ResourceRef<R> {
+        let resource_id = self.next_resource_id;
+        self.resources.entry::<HashMap<usize, R>>()
+            .or_insert_with(|| HashMap::new())
+            .insert(resource_id, resource);
+        self.next_resource_id += 1;
+        ResourceRef { index: Some(resource_id), resource_type: PhantomData }
+    }
+
+    pub fn get_resource<R: 'static>(&mut self, resource_ref: ResourceRef<R>) -> &R {
+         &self.resources.get::<HashMap<usize, R>>().expect("invalid resource id")[&resource_ref.index.expect("invalid resource id")]
+    }
+
+    pub fn remove_resource<R: 'static>(&mut self, resource_ref: ResourceRef<R>) -> R {
+        self.resources.get_mut::<HashMap<usize, R>>().expect("invalid resource id").remove(&resource_ref.index.expect("invalid resource id")).expect("invalid resource id")
+    }
+
+    /* event handling */
+
+    pub fn send<M: 'static>(&mut self, receiver: ElementRef, message: &M) {
+        let callback = if let Some(callback) = self.receivers.get(&receiver).expect("invalid element id").get(&TypeId::of::<M>()) {
+            *callback
+        } else {
+            return;
+        };
+        let receiver_ptr: *mut Element = self.elements.get_mut(&receiver).expect("invalid element id").borrow_mut();
+        let receiver_raw = unsafe { mem::transmute(receiver_ptr as *mut ()) };
+        let ctx = Context::new(self, receiver);
+        let message_raw = unsafe { mem::transmute(message) };
+        callback(receiver_raw, ctx, message_raw);
+    }
+
+    fn receive<E, M: 'static>(&mut self, receiver: ElementRef, callback: fn(&mut E, Context<E>, &M)) {
+        self.receivers.get_mut(&receiver).expect("invalid element id").insert(TypeId::of::<M>(), unsafe { mem::transmute(callback) });
+    }
+
+    fn fire<Ev: 'static>(&mut self, source: ElementRef, event: &Ev) {
+        let listeners = if let Some(listeners) = self.listeners.get(&source).expect("invalid element id").get(&TypeId::of::<Ev>()) {
+            listeners.clone()
+        } else {
+            return;
+        };
+        for (listener, callback) in listeners {
+            let listener_ptr: *mut Element = self.elements.get_mut(&listener).expect("invalid element id").borrow_mut();
+            let listener_raw = unsafe { mem::transmute(listener_ptr as *mut ()) };
+            let ctx = Context::new(self, listener);
+            let event_raw = unsafe { mem::transmute(event) };
+            callback(listener_raw, ctx, event_raw);
+        }
+    }
+
+    fn listen<E, Ev: 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: fn(&mut E, Context<E>, &Ev)) {
+        self.listeners.get_mut(&source).expect("invalid element id")
+            .entry(TypeId::of::<Ev>()).or_insert_with(|| HashMap::new())
+            .insert(listener, unsafe { mem::transmute(callback) });
+        self.listening.entry(listener).or_insert_with(|| HashMap::new())
+            .entry(source).or_insert_with(|| HashSet::new())
+            .insert(TypeId::of::<Ev>());
+    }
+
+    pub fn set_modifiers(&mut self, modifiers: KeyboardModifiers) {
+        self.input_state.modifiers = modifiers;
+    }
+
+    pub fn handle(&mut self, ev: InputEvent) -> UIEventResponse {
         match ev {
             InputEvent::CursorMoved { position } => {
-                if self.mouse_position_captured {
-                    if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
-                        self.input_state.mouse_position += position - mouse_drag_origin;
-                    } else {
-                        self.input_state.mouse_position = position;
-                    }
-                } else {
-                    self.input_state.mouse_position = position;
-                }
+                self.input_state.mouse_position = position;
             }
             InputEvent::MousePress { button } => {
                 match button {
@@ -178,60 +408,68 @@ impl UI {
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let response = match ev {
+        let handler = match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
-                if let Some(ref focus) = self.mouse_focus {
-                    focus.borrow_mut().handle_event(ev, self.input_state)
-                } else {
-                    self.root.borrow_mut().handle_event(ev, self.input_state)
-                }
+                // if let Some(dragging) = self.dragging {
+                //     Some(dragging)
+                // } else {
+                    if self.layout[&self.root].contains_point(self.input_state.mouse_position) {
+                        Some(self.find_element(self.root, /*self.input_state.mouse_drag_origin.unwrap_or(*/self.input_state.mouse_position))
+                    } else {
+                        None
+                    }
+                // }
             },
             InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
-                if let Some(ref focus) = self.keyboard_focus {
-                    focus.borrow_mut().handle_event(ev, self.input_state)
-                } else {
-                    self.root.borrow_mut().handle_event(ev, self.input_state)
-                }
+                self.focus.or(Some(self.root))
             }
             _ => {
-                self.root.borrow_mut().handle_event(ev, self.input_state)
+                Some(self.root)
             }
         };
 
-        if response.capture_keyboard {
-            if let Some(ref focus) = self.keyboard_focus {
-                focus.borrow_mut().handle_event(InputEvent::LostKeyboardFocus, self.input_state);
+        if let Some(handler) = handler {
+            let mut handler = handler;
+            while self.parents.contains_key(&handler) && !self.receivers.get(&handler).expect("invalid element id").contains_key(&TypeId::of::<InputEvent>()) {
+                handler = *self.parents.get(&handler).expect("invalid element id");
             }
-            if let Some(ref responder) = response.responder {
-                self.keyboard_focus = Some(responder.clone());
-            }
+            self.send(handler, &ev);
         }
-        if response.capture_mouse {
-            if let Some(ref responder) = response.responder {
-                self.mouse_focus = Some(responder.clone());
-            }
-        }
-        if response.capture_mouse_position {
-            self.mouse_position_captured = true;
-        }
-        if self.mouse_position_captured {
-            if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
-                ui_response.set_mouse_position = Some((mouse_drag_origin.x, mouse_drag_origin.y));
-            }
-        }
-        ui_response.mouse_cursor = response.mouse_cursor;
+
+        // if response.capture_keyboard {
+        //     if let Some(ref focus) = self.keyboard_focus {
+        //         focus.borrow_mut().handle_event(InputEvent::LostKeyboardFocus, self.input_state);
+        //     }
+        //     if let Some(ref responder) = response.responder {
+        //         self.keyboard_focus = Some(responder.clone());
+        //     }
+        // }
+        // if response.capture_mouse {
+        //     if let Some(ref responder) = response.responder {
+        //         self.mouse_focus = Some(responder.clone());
+        //     }
+        // }
+        // if response.capture_mouse_position {
+        //     self.mouse_position_captured = true;
+        // }
+        // if self.mouse_position_captured {
+        //     if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
+        //         ui_response.set_mouse_position = Some((mouse_drag_origin.x, mouse_drag_origin.y));
+        //     }
+        // }
+        // ui_response.mouse_cursor = response.mouse_cursor;
 
         match ev {
             InputEvent::MouseRelease { button: MouseButton::Left } => {
-                if self.mouse_position_captured {
-                    if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
-                        self.input_state.mouse_position = mouse_drag_origin;
-                    }
-                    self.mouse_position_captured = false;
-                }
+                // if self.mouse_position_captured {
+                //     if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
+                //         self.input_state.mouse_position = mouse_drag_origin;
+                //     }
+                //     self.mouse_position_captured = false;
+                // }
 
                 self.input_state.mouse_drag_origin = None;
-                self.mouse_focus = None;
+                // self.mouse_focus = None;
             }
             _ => {}
         }
@@ -239,382 +477,525 @@ impl UI {
         ui_response
     }
 
+    fn find_element(&self, parent: usize, point: Point) -> usize {
+        for child in self.children[&parent].iter() {
+            if self.layout[child].contains_point(point) {
+                return self.find_element(*child, point);
+            }
+        }
+        parent
+    }
+
+    /* display */
+
     pub fn display(&self) -> DisplayList {
         let mut list = DisplayList::new();
-        self.root.borrow().display(self.input_state, &mut list);
+        self.display_element(self.root, &mut list);
         list
     }
-}
 
-
-pub struct Empty;
-
-impl Empty {
-    pub fn new() -> Rc<RefCell<Empty>> {
-        Rc::new(RefCell::new(Empty))
-    }
-}
-
-impl Widget for Empty {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {}
-    fn get_min_size(&self) -> (f32, f32) { (0.0, 0.0) }
-    fn get_size(&self) -> (f32, f32) { (0.0, 0.0) }
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse { Default::default() }
-    fn display(&self, input_state: InputState, list: &mut DisplayList) { }
-}
-
-
-pub struct Container {
-    child: WidgetRef,
-    style: ContainerStyle,
-    container_width: Option<f32>,
-    container_height: Option<f32>,
-}
-
-impl Container {
-    pub fn new(child: WidgetRef) -> Rc<RefCell<Container>> {
-        Rc::new(RefCell::new(Container { child: child, style: Default::default(), container_width: None, container_height: None }))
+    fn display_element(&self, element: usize, list: &mut DisplayList) {
+        self.elements.get(&element).expect("invalid element id").display(&Resources::new(element, self.elements[&element].type_id(), &self), *self.layout.get(&element).expect("invalid element id"), self.input_state, list);
+        if let Some(children) = self.children.get(&element) {
+            for child in children {
+                self.display_element(*child, list);
+            }
+        }
     }
 
-    pub fn get_style(&mut self) -> &mut ContainerStyle {
-        &mut self.style
+    /* layout */
+
+    pub fn layout(&mut self) {
+        let (_bounding_box, mut tree) = self.measure(self.root);
+        let root = self.root;
+        let bounds = BoundingBox::new(0.0, 0.0, self.width, self.height);
+        self.arrange(root, bounds, &mut tree);
     }
 
-    fn get_max_size(&self) -> (Option<f32>, Option<f32>) {
-        let max_width = self.container_width
-            .and_then(|container_width| self.style.max_width.and_then(|max_width| Some(container_width.min(max_width))))
-            .or(self.container_width).or(self.style.max_width);
-        let max_height = self.container_height
-            .and_then(|container_height| self.style.max_height.and_then(|max_height| Some(container_height.min(max_height))))
-            .or(self.container_height).or(self.style.max_height);
-        (max_width, max_height)
+    fn measure(&self, element: ElementRef) -> (BoundingBox, BoundingBoxTree) {
+        let mut child_boxes = Vec::new();
+        let mut child_trees = Vec::new();
+        if let Some(children) = self.children.get(&element) {
+            child_boxes.reserve(children.len());
+            child_trees.reserve(children.len());
+            for child in children {
+                let (child_box, child_tree) = self.measure(*child);
+                child_boxes.push(child_box);
+                child_trees.push(child_tree);
+            }
+        }
+        let bounding_box = self.elements.get(&element).expect("invalid element id").measure(&Resources::new(element, self.elements[&element].type_id(), &self), &child_boxes[..]);
+        (bounding_box, BoundingBoxTree { boxes: child_boxes, trees: child_trees })
     }
 
-    fn get_size_from_child_size(&self, child_width: f32, child_height: f32) -> (f32, f32) {
-        let (max_width, max_height) = self.get_max_size();
-        let width = if max_width.is_some() && self.style.h_fill {
-            max_width.unwrap()
-        } else {
-            let contents_width = child_width + 2.0 * self.style.padding;
-            self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width))
+    fn arrange(&mut self, element: ElementRef, bounds: BoundingBox, tree: &mut BoundingBoxTree) {
+        let bounding_box = {
+            let resources = Resources {
+                element: element,
+                element_type_id: self.elements[&element].type_id(),
+                element_classes: &self.element_classes[&element],
+
+                global_styles: &self.global_styles,
+                global_element_styles: &self.global_element_styles,
+                class_styles: &self.class_styles,
+                element_styles: &self.element_styles,
+
+                resources: &self.resources,
+            };
+            self.elements.get_mut(&element).expect("invalid element id").arrange(&resources, bounds, &mut tree.boxes[..])
         };
-        let height = if max_height.is_some() && self.style.v_fill {
-            max_height.unwrap()
-        } else {
-            let contents_height = child_height + 2.0 * self.style.padding;
-            self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height))
-        };
-        (width, height)
-    }
-
-    fn get_layout(&self) -> ((f32, f32), (f32, f32)) {
-        let (child_width, child_height) = self.child.borrow().get_size();
-
-        let (width, height) = self.get_size_from_child_size(child_width, child_height);
-        let x_offset = match self.style.h_align {
-            Align::Beginning => self.style.padding,
-            Align::Center => width / 2.0 - child_width / 2.0,
-            Align::End => width - self.style.padding - child_width,
-        };
-        let y_offset = match self.style.v_align {
-            Align::Beginning => self.style.padding,
-            Align::Center => height / 2.0 - child_height / 2.0,
-            Align::End => height - self.style.padding - child_height,
-        };
-
-        ((x_offset, y_offset), (width, height))
+        self.layout.insert(element, bounding_box);
+        if let Some(children) = self.children.get(&element).map(|children| children.clone()) {
+            for (i, child) in children.iter().enumerate() {
+                self.arrange(*child, tree.boxes[i], &mut tree.trees[i]);
+            }
+        }
     }
 }
 
-impl Widget for Container {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.container_width = width;
-        self.container_height = height;
-        let (max_width, max_height) = self.get_max_size();
-        self.child.borrow_mut().set_container_size(max_width.map(|max_width| max_width - 2.0 * self.style.padding), max_height.map(|max_height| max_height - 2.0 * self.style.padding));
+pub struct Context<'a, E> {
+    ui: &'a mut UI,
+    element: ElementRef,
+    phantom_data: PhantomData<E>,
+}
+
+impl<'a, E: 'static> Context<'a, E> {
+    fn new(ui: &'a mut UI, element: ElementRef) -> Context<'a, E> {
+        Context {
+            ui: ui,
+            element: element,
+            phantom_data: PhantomData,
+        }
     }
 
-    fn get_min_size(&self) -> (f32, f32) {
-        let (child_width, child_height) = self.child.borrow().get_min_size();
-        let contents_width = child_width + 2.0 * self.style.padding;
-        let contents_height = child_height + 2.0 * self.style.padding;
-        let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
-        let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
-        (min_width, min_height)
+    pub fn get_self(&self) -> ElementRef {
+        self.element
     }
 
-    fn get_size(&self) -> (f32, f32) {
-        let (child_width, child_height) = self.child.borrow().get_size();
-        self.get_size_from_child_size(child_width, child_height)
+    pub fn subtree<'b>(&'b mut self) -> Slot<'b> {
+        Slot::new(self.ui, self.element)
     }
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        let ((x, y), (width, height)) = self.get_layout();
-        let mut response = self.child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-        response.responder = response.responder.or_else(|| Some(self.child.clone()));
-        response
+    pub fn get_slot<'b>(&'b mut self, element: ElementRef) -> Slot<'b> {
+        self.ui.get_slot(element)
     }
 
-    fn display(&self, input_state: InputState, list: &mut DisplayList) {
-        let ((x, y), (width, height)) = self.get_layout();
-        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
-        list.push_translate(Point { x: x, y: y });
-        self.child.borrow().display(input_state.translate(Point { x: -self.style.padding, y: -self.style.padding }), list);
-        list.pop_translate();
+    pub fn register_slot(&mut self, element: ElementRef) {
+        self.ui.register_slot(self.element, element);
+    }
+
+    pub fn send<M: 'static>(&mut self, element: ElementRef, message: &M) {
+        self.ui.send::<M>(element, message);
+    }
+
+    pub fn receive<M: 'static>(&mut self, callback: fn(&mut E, Context<E>, &M)) {
+        self.ui.receive::<E, M>(self.element, callback);
+    }
+
+    pub fn fire<Ev: 'static>(&mut self, event: &Ev) {
+        self.ui.fire::<Ev>(self.element, event);
+    }
+
+    pub fn listen<Ev: 'static>(&mut self, element: ElementRef, callback: fn(&mut E, Context<E>, &Ev)) {
+        self.ui.listen::<E, Ev>(self.element, element, callback);
+    }
+
+    pub fn set_element_style<P: Patch>(&mut self, element: usize, style: P::PatchType) {
+        self.ui.set_element_style::<P>(element, style);
+    }
+
+    pub fn get_input_state(&self) -> InputState {
+        self.ui.input_state
+    }
+
+    pub fn resources(&self) -> Resources {
+        Resources::new(self.element, TypeId::of::<E>(), &self.ui)
     }
 }
 
-pub struct ContainerStyle {
-    pub padding: f32,
-    pub min_width: Option<f32>,
-    pub max_width: Option<f32>,
-    pub min_height: Option<f32>,
-    pub max_height: Option<f32>,
-    pub h_align: Align,
-    pub v_align: Align,
-    pub h_fill: bool,
-    pub v_fill: bool,
-    pub background_color: [f32; 4],
+pub struct Slot<'a> {
+    ui: &'a mut UI,
+    element: ElementRef,
 }
 
-pub enum Align { Beginning, Center, End }
+impl<'a> Slot<'a> {
+    fn new(ui: &'a mut UI, element: ElementRef) -> Slot<'a> {
+        Slot {
+            ui: ui,
+            element: element,
+        }
+    }
 
-impl Default for ContainerStyle {
-    fn default() -> ContainerStyle {
-        ContainerStyle {
-            padding: 8.0,
-            min_width: None,
-            max_width: None,
-            min_height: None,
-            max_height: None,
+    pub fn add_child<E, I>(&mut self, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+        self.ui.add_child(self.element, install)
+    }
+
+    pub fn insert_child<E, I>(&mut self, index: usize, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+        self.ui.insert_child(self.element, index, install)
+    }
+
+    pub fn remove_child(&mut self, index: usize) {
+        self.ui.remove_child(self.element, index)
+    }
+
+    pub fn get_child(&self, index: usize) -> Option<ElementRef> {
+        self.ui.get_child(self.element, index)
+    }
+}
+
+struct BoundingBoxTree {
+    boxes: Vec<BoundingBox>,
+    trees: Vec<BoundingBoxTree>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum InputEvent {
+    CursorMoved { position: Point },
+    MousePress { button: MouseButton },
+    MouseRelease { button: MouseButton },
+    MouseScroll { delta: f32 },
+    KeyPress { button: KeyboardButton },
+    KeyRelease { button: KeyboardButton },
+    TextInput { character: char },
+    LostKeyboardFocus,
+}
+
+#[derive(Copy, Clone)]
+pub struct UIEventResponse {
+    pub set_mouse_position: Option<(f32, f32)>,
+    pub mouse_cursor: MouseCursor,
+}
+
+impl Default for UIEventResponse {
+    fn default() -> UIEventResponse {
+        UIEventResponse {
+            set_mouse_position: None,
+            mouse_cursor: MouseCursor::Default,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct InputState {
+    pub mouse_position: Point,
+    pub mouse_drag_origin: Option<Point>,
+    pub mouse_left_pressed: bool,
+    pub mouse_middle_pressed: bool,
+    pub mouse_right_pressed: bool,
+    pub modifiers: KeyboardModifiers,
+}
+
+#[derive(Copy, Clone)]
+pub struct KeyboardModifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub logo: bool,
+}
+
+impl Default for KeyboardModifiers {
+    fn default() -> KeyboardModifiers {
+        KeyboardModifiers {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            logo: false,
+        }
+    }
+}
+
+impl KeyboardModifiers {
+    pub fn from_glutin(modifiers: glutin::ModifiersState) -> KeyboardModifiers {
+        KeyboardModifiers {
+            shift: modifiers.shift,
+            ctrl: modifiers.ctrl,
+            alt: modifiers.alt,
+            logo: modifiers.logo,
+        }
+    }
+}
+
+pub struct EventResponse {
+    capture_keyboard: bool,
+    capture_mouse: bool,
+    capture_mouse_position: bool,
+    mouse_cursor: MouseCursor,
+}
+
+impl Default for EventResponse {
+    fn default() -> EventResponse {
+        EventResponse {
+            capture_keyboard: false,
+            capture_mouse: false,
+            capture_mouse_position: false,
+            mouse_cursor: MouseCursor::Default,
+        }
+    }
+}
+
+pub struct Resources<'a> {
+    element: usize,
+    element_type_id: TypeId,
+    element_classes: &'a Vec<ClassRef>,
+
+    global_styles: &'a AnyMap,
+    global_element_styles: &'a HashMap<TypeId, AnyMap>,
+    class_styles: &'a HashMap<ClassRef, AnyMap>,
+    element_styles: &'a HashMap<usize, AnyMap>,
+
+    resources: &'a AnyMap,
+}
+
+impl<'a> Resources<'a> {
+    fn new(element: ElementRef, type_id: TypeId, ui: &UI) -> Resources {
+        Resources {
+            element: element,
+            element_type_id: type_id,
+            element_classes: &ui.element_classes[&element],
+
+            global_styles: &ui.global_styles,
+            global_element_styles: &ui.global_element_styles,
+            class_styles: &ui.class_styles,
+            element_styles: &ui.element_styles,
+
+            resources: &ui.resources,
+        }
+    }
+
+    pub fn get_style<P: Patch + Default>(&self) -> P {
+        let mut style: P = Default::default();
+        if let Some(patch) = self.global_styles.get::<P::PatchType>() {
+            style.patch(patch);
+        }
+        if let Some(map) = self.global_element_styles.get(&self.element_type_id) {
+            if let Some(patch) = map.get::<P::PatchType>() {
+                style.patch(patch);
+            }
+        }
+        for class in self.element_classes.iter() {
+            if let Some(patch) = self.class_styles[&class].get::<P::PatchType>() {
+                style.patch(patch);
+            }
+        }
+        if let Some(patch) = self.element_styles[&self.element].get::<P::PatchType>() {
+            style.patch(patch);
+        }
+        style
+    }
+
+    pub fn get_resource<R: 'static>(&self, resource_ref: ResourceRef<R>) -> &R {
+        &self.resources.get::<HashMap<usize, R>>().expect("invalid resource id")[&resource_ref.index.expect("invalid resource id")]
+    }
+}
+
+
+macro_rules! style {
+    (struct $style:ident { $($field:ident: $type:ty,)* }, $patch:ident) => {
+        pub struct $style {
+            pub $($field: $type,)*
+        }
+
+        pub struct $patch {
+            $($field: Option<$type>,)*
+        }
+
+        impl $style {
+            $(
+                pub fn $field(value: $type) -> $patch {
+                    $patch { $field: Some(value), ..Default::default() }
+                }
+            )*
+        }
+
+        impl $patch {
+            $(
+                pub fn $field(mut self, value: $type) -> $patch {
+                    self.$field = Some(value);
+                    self
+                }
+            )*
+        }
+
+        impl Default for $patch {
+            fn default() -> $patch {
+                $patch {
+                    $($field: None,)*
+                }
+            }
+        }
+
+        impl Patch for $style {
+            type PatchType = $patch;
+            fn patch(&mut self, patch: &$patch) {
+                $(
+                    if let Some($field) = patch.$field.clone() {
+                        self.$field = $field;
+                    }
+                )*
+            } 
+        }
+    }
+}
+
+
+pub trait Patch {
+    type PatchType: 'static;
+    fn patch(&mut self, patch: &Self::PatchType);
+}
+
+
+style! {
+    struct BoxStyle {
+        padding: f32,
+        min_width: f32,
+        min_height: f32,
+        max_width: f32,
+        max_height: f32,
+        h_align: Align,
+        v_align: Align,
+        color: [f32; 4],
+    },
+    BoxStylePatch
+}
+
+impl Default for BoxStyle {
+    fn default() -> BoxStyle {
+        BoxStyle {
+            padding: 0.0,
+            min_width: 0.0,
+            min_height: 0.0,
+            max_width: f32::INFINITY,
+            max_height: f32::INFINITY,
             h_align: Align::Beginning,
             v_align: Align::Beginning,
-            h_fill: false,
-            v_fill: false,
-            background_color: [0.0, 0.0, 0.0, 0.0],
+            color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }
 
 
-pub struct Flex {
-    children: Vec<WidgetRef>,
-    style: FlexStyle,
-    container_width: Option<f32>,
-    container_height: Option<f32>,
+pub struct Stack;
+
+impl Stack {
+    pub fn install(mut ctx: Context<Stack>) -> Stack {
+        let id = ctx.get_self();
+        ctx.register_slot(id);
+        Stack
+    }
+
+    fn main_cross(&self, axis: Axis, point: Point) -> (f32, f32) { match axis { Axis::Horizontal => (point.x, point.y), Axis::Vertical => (point.y, point.x) } }
+    fn x_y(&self, axis: Axis, main: f32, cross: f32) -> Point { match axis { Axis::Horizontal => Point::new(main, cross), Axis::Vertical => Point::new(cross, main) } }
 }
 
-impl Flex {
-    pub fn new(children: Vec<WidgetRef>, axis: FlexAxis) -> Rc<RefCell<Flex>> {
-        Rc::new(RefCell::new(Flex { children: children, style: FlexStyle { axis: axis, ..Default::default() }, container_width: None, container_height: None }))
+style! {
+    struct StackStyle {
+        spacing: f32,
+        axis: Axis,
+        grow: Grow,
+    },
+    StackStylePatch
+}
+
+impl Default for StackStyle {
+    fn default() -> StackStyle {
+        StackStyle {
+            spacing: 0.0,
+            axis: Axis::Horizontal,
+            grow: Grow::None,
+        }
+    }
+}
+
+impl Element for Stack {
+    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
+        let stack_style = resources.get_style::<StackStyle>();
+
+        let mut main = 0.0f32;
+        let mut cross = 0.0f32;
+        for child_box in children {
+            let (child_main, child_cross) = self.main_cross(stack_style.axis, child_box.size);
+            main += child_main;
+            cross = cross.max(child_cross);
+        }
+
+        main += 2.0 * box_style.padding + stack_style.spacing * (children.len() as i32 - 1).max(0) as f32;
+        cross += 2.0 * box_style.padding;
+
+        let mut size = self.x_y(stack_style.axis, main, cross);
+        size.x = size.x.max(box_style.min_width).min(box_style.max_width);
+        size.y = size.y.max(box_style.min_height).min(box_style.max_height);
+
+        BoundingBox { pos: Point::new(0.0, 0.0), size: size }
     }
 
-    pub fn row(children: Vec<WidgetRef>) -> Rc<RefCell<Flex>> {
-        Flex::new(children, FlexAxis::Horizontal)
-    }
+    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
+        let stack_style = resources.get_style::<StackStyle>();
 
-    pub fn col(children: Vec<WidgetRef>) -> Rc<RefCell<Flex>> {
-        Flex::new(children, FlexAxis::Vertical)
-    }
+        let (main_offset, cross_offset) = self.main_cross(stack_style.axis, bounds.pos);
+        let (main_max, cross_max) = self.main_cross(stack_style.axis, bounds.size);
+        let mut children_main = 0.0;
+        for child_box in children.iter() {
+            children_main += self.main_cross(stack_style.axis, child_box.size).0;
+        }
+        let extra = main_max - 2.0 * box_style.padding - stack_style.spacing * (children.len() as i32 - 1).max(0) as f32 - children_main;
+        let child_cross = cross_max - 2.0 * box_style.padding;
 
-    pub fn get_child(&self, i: usize) -> WidgetRef {
-        self.children[i].clone()
-    }
-
-    pub fn get_style(&mut self) -> &mut FlexStyle {
-        &mut self.style
-    }
-
-    fn get_max_size(&self) -> (Option<f32>, Option<f32>) {
-        let max_width = self.container_width
-            .and_then(|container_width| self.style.max_width.and_then(|max_width| Some(container_width.min(max_width))))
-            .or(self.container_width).or(self.style.max_width);
-        let max_height = self.container_height
-            .and_then(|container_height| self.style.max_height.and_then(|max_height| Some(container_height.min(max_height))))
-            .or(self.container_height).or(self.style.max_height);
-        (max_width, max_height)
-    }
-
-    fn get_length_from_child_lengths(&self, child_lengths: &Vec<f32>, max_length: Option<f32>) -> Vec<f32> {
-        let mut container_lengths: Vec<f32> = child_lengths.clone();
-        let children_length = container_lengths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-        let length = self.get_length_from_children_length(children_length, max_length);
-        let extra_space = length - children_length - 2.0 * self.style.padding - self.style.spacing * (self.children.len() - 1) as f32;
-        match self.style.main_fill {
-            Grow::None => {}
+        match stack_style.grow {
+            Grow::None => {
+                for child_box in children.iter_mut() {
+                    let (child_main, _child_cross) = self.main_cross(stack_style.axis, child_box.size);
+                    child_box.size = self.x_y(stack_style.axis, child_main, child_cross);
+                }
+            }
             Grow::Equal => {
-                let count = self.children.len() as f32;
-                for child_length in container_lengths.iter_mut() {
-                    *child_length += extra_space / count;
+                let children_len = children.len() as f32;
+                for child_box in children.iter_mut() {
+                    let (child_main, _child_cross) = self.main_cross(stack_style.axis, child_box.size);
+                    child_box.size = self.x_y(stack_style.axis, child_main + extra / children_len, child_cross);
                 }
             }
-            Grow::Ratio(ref amounts) => {
+            Grow::Ratio(amounts) => {
                 let total: f32 = amounts.iter().sum();
-                for (i, child_length) in container_lengths.iter_mut().enumerate() {
-                    *child_length += (amounts[i] / total) * extra_space;
+                for (i, child_box) in children.iter_mut().enumerate() {
+                    let (child_main, _child_cross) = self.main_cross(stack_style.axis, child_box.size);
+                    child_box.size = self.x_y(stack_style.axis, child_main + extra * amounts[i] / total, child_cross);
                 }
             }
         }
-        container_lengths
-    }
 
-    fn get_length_from_children_length(&self, children_length: f32, max_length: Option<f32>) -> f32 {
-        let length = if max_length.is_some() && self.style.main_fill != Grow::None {
-            max_length.unwrap()
-        } else {
-            let contents_length = children_length + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-            self.main_axis((self.style.min_width, self.style.min_height)).map_or(contents_length, |min_length| min_length.max(contents_length))
-        };
-        length
-    }
-
-    fn get_cross_length_from_child_cross_lengths(&self, child_cross_lengths: &Vec<f32>, max_cross_length: Option<f32>) -> f32 {
-        let cross_length = if max_cross_length.is_some() && self.style.cross_fill {
-            max_cross_length.unwrap()
-        } else {
-            let mut contents_cross_length: f32 = 0.0;
-            for child_cross_length in child_cross_lengths {
-                contents_cross_length = contents_cross_length.max(*child_cross_length);
-            }
-            self.cross_axis((self.style.min_width, self.style.min_height)).map_or(contents_cross_length, |min_cross_length| min_cross_length.max(contents_cross_length))
-        };
-        cross_length
-    }
-
-    fn get_layout(&self) -> (Vec<(f32, f32)>, Vec<(f32, f32)>, (f32, f32)) {
-        let max_size = self.get_max_size();
-        let child_sizes: Vec<(f32, f32)> = self.children.iter().map(|child| child.borrow().get_size()).collect();
-        let container_lengths = self.get_length_from_child_lengths(&child_sizes.iter().map(|child_size| self.main_axis(*child_size)).collect(), self.main_axis(max_size));
-        let children_length = container_lengths.iter().sum::<f32>() + 2.0 * self.style.padding + self.style.spacing * (self.children.len() - 1) as f32;
-        let length = self.get_length_from_children_length(children_length, self.main_axis(max_size));
-        let cross_length = self.get_cross_length_from_child_cross_lengths(&child_sizes.iter().map(|child_size| self.cross_axis(*child_size)).collect(), self.cross_axis(max_size));
-
-        let mut child_offsets = Vec::with_capacity(self.children.len());
-        let mut offset = self.style.padding;
-        for i in 0..self.children.len() {
-            let child_size = child_sizes[i];
-            let container_length = container_lengths[i];
-
-            let main = offset + match self.style.main_align {
-                Align::Beginning => 0.0,
-                Align::Center => container_length / 2.0 - self.main_axis(child_size) / 2.0,
-                Align::End => container_length - self.main_axis(child_size),
-            };
-            let cross = match self.style.cross_align {
-                Align::Beginning => self.style.padding,
-                Align::Center => cross_length / 2.0 - self.cross_axis(child_size) / 2.0,
-                Align::End => cross_length - self.style.padding - self.cross_axis(child_size),
-            };
-            child_offsets.push(self.main_cross_to_x_y((main, cross)));
-
-            offset += container_length + self.style.spacing;
+        let mut main_offset = main_offset + box_style.padding;
+        let cross_offset = cross_offset + box_style.padding;
+        for child_box in children.iter_mut() {
+            let child_main = self.main_cross(stack_style.axis, child_box.size).0;
+            child_box.pos = self.x_y(stack_style.axis, main_offset, cross_offset);
+            child_box.size = self.x_y(stack_style.axis, child_main, child_cross);
+            main_offset += child_main + stack_style.spacing;
         }
 
-        (child_offsets, child_sizes, self.main_cross_to_x_y((length, cross_length)))
+        bounds
     }
 
-    fn main_axis<T>(&self, size: (T, T)) -> T {
-        match self.style.axis {
-            FlexAxis::Horizontal => size.0,
-            FlexAxis::Vertical => size.1,
-        }
-    }
+    fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
+        let box_style = resources.get_style::<BoxStyle>();
 
-    fn cross_axis<T>(&self, size: (T, T)) -> T {
-        match self.style.axis {
-            FlexAxis::Horizontal => size.1,
-            FlexAxis::Vertical => size.0,
-        }
-    }
-
-    fn main_cross_to_x_y<T>(&self, main_cross: (T, T)) -> (T, T) {
-        match self.style.axis {
-            FlexAxis::Horizontal => (main_cross.0, main_cross.1),
-            FlexAxis::Vertical => (main_cross.1, main_cross.0),
-        }
+        // let color = [0.15, 0.18, 0.23, 1.0];
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: box_style.color });
     }
 }
 
-impl Widget for Flex {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.container_width = width;
-        self.container_height = height;
-        let max_size = self.get_max_size();
-        let min_child_lengths: Vec<f32> = self.children.iter().map(|child| self.main_axis(child.borrow().get_min_size())).collect();
-        let container_lengths = self.get_length_from_child_lengths(&min_child_lengths, self.main_axis(max_size));
-        for (i, child) in self.children.iter().enumerate() {
-            let (container_width, container_height) = self.main_cross_to_x_y((Some(container_lengths[i]), self.cross_axis(max_size)));
-            child.borrow_mut().set_container_size(container_width, container_height);
-        }
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        let mut main: f32 = 0.0;
-        let mut cross: f32 = 0.0;
-        for child in self.children.iter() {
-            let child_min_size = child.borrow().get_min_size();
-            main += self.main_axis(child_min_size) + self.style.spacing;
-            cross = cross.max(self.cross_axis(child_min_size));
-        }
-        let (contents_width, contents_height) = self.main_cross_to_x_y((main + 2.0 * self.style.padding, cross + 2.0 * self.style.padding));
-        let min_width = self.style.min_width.map_or(contents_width, |min_width| min_width.max(contents_width));
-        let min_height = self.style.min_height.map_or(contents_height, |min_height| min_height.max(contents_height));
-        (min_width, min_height)
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        let (_, _, (width, height)) = self.get_layout();
-        (width, height)
-    }
-
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        let (child_offsets, child_sizes, _) = self.get_layout();
-
-        match ev {
-            InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
-                let mouse_position = input_state.mouse_drag_origin.unwrap_or(input_state.mouse_position);
-
-                for (i, child) in self.children.iter().enumerate() {
-                    let (x, y) = child_offsets[i];
-                    if x <= mouse_position.x && mouse_position.x < x + child_sizes[i].0 && y <= mouse_position.y && mouse_position.y < y + child_sizes[i].1 {
-                        let mut response = child.borrow_mut().handle_event(ev, input_state.translate(Point { x: -x, y: -y }));
-                        response.responder = response.responder.or_else(|| Some(child.clone()));
-                        return response;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        Default::default()
-    }
-
-    fn display(&self, input_state: InputState, list: &mut DisplayList) {
-        let (child_offsets, child_sizes, (width, height)) = self.get_layout();
-
-        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.style.background_color });
-        for (i, child) in self.children.iter().enumerate() {
-            let (x, y) = child_offsets[i];
-            list.push_translate(Point { x: x, y: y });
-            child.borrow().display(input_state.translate(Point { x: -x, y: -y }), list);
-            list.pop_translate();
-        }
-    }
+#[derive(Copy, Clone, PartialEq)]
+pub enum Align {
+    Beginning,
+    Center,
+    End
 }
 
-pub struct FlexStyle {
-    pub axis: FlexAxis,
-    pub padding: f32,
-    pub spacing: f32,
-    pub min_width: Option<f32>,
-    pub max_width: Option<f32>,
-    pub min_height: Option<f32>,
-    pub max_height: Option<f32>,
-    pub main_align: Align,
-    pub cross_align: Align,
-    pub main_fill: Grow,
-    pub cross_fill: bool,
-    pub background_color: [f32; 4],
+#[derive(Copy, Clone, PartialEq)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
 }
 
 #[derive(Clone, PartialEq)]
@@ -624,187 +1005,108 @@ pub enum Grow {
     Ratio(Vec<f32>),
 }
 
-#[derive(Clone, PartialEq)]
-pub enum FlexAxis {
-    Horizontal,
-    Vertical,
+
+style! {
+    struct TextStyle {
+        font: ResourceRef<Font<'static>>,
+        scale: Scale,
+    },
+    TextStylePatch
 }
 
-impl Default for FlexStyle {
-    fn default() -> FlexStyle {
-        FlexStyle {
-            axis: FlexAxis::Horizontal,
-            padding: 0.0,
-            spacing: 0.0,
-            min_width: None,
-            max_width: None,
-            min_height: None,
-            max_height: None,
-            main_align: Align::Beginning,
-            cross_align: Align::Beginning,
-            main_fill: Grow::None,
-            cross_fill: false,
-            background_color: [0.0, 0.0, 0.0, 0.0],
+impl Default for TextStyle {
+    fn default() -> TextStyle {
+        TextStyle {
+            font: ResourceRef::null(),
+            scale: Scale::uniform(14.0),
         }
     }
 }
-
-
-pub struct Button {
-    contents: WidgetRef,
-    on_press: Option<Box<Fn()>>,
-}
-
-impl Button {
-    pub fn new(contents: WidgetRef) -> Rc<RefCell<Button>> {
-        Rc::new(RefCell::new(Button { contents: Container::new(contents), on_press: None }))
-    }
-
-    pub fn with_text(text: &'static str, font: Rc<Font<'static>>) -> Rc<RefCell<Button>> {
-        Button::new(Label::new(text, font))
-    }
-
-    pub fn on_press<F>(&mut self, callback: F) where F: 'static + Fn() {
-        self.on_press = Some(Box::new(callback));
-    }
-}
-
-impl Widget for Button {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        self.contents.borrow().get_min_size()
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        self.contents.borrow().get_size()
-    }
-
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        match ev {
-            InputEvent::MouseRelease { button: MouseButton::Left } => {
-                let (width, height) = self.get_size();
-                if 0.0 < input_state.mouse_position.x && input_state.mouse_position.x < width && 0.0 < input_state.mouse_position.y && input_state.mouse_position.y < height {
-                    if let Some(ref on_press) = self.on_press {
-                        on_press();
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        Default::default()
-    }
-
-    fn display(&self, input_state: InputState, list: &mut DisplayList) {
-        let (width, height) = self.get_size();
-
-        let mut color = [0.15, 0.18, 0.23, 1.0];
-        if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
-            if 0.0 <= mouse_drag_origin.x && mouse_drag_origin.x < width && 0.0 <= mouse_drag_origin.y && mouse_drag_origin.y < height {
-                color = [0.02, 0.2, 0.6, 1.0];
-            }
-        } else if 0.0 <= input_state.mouse_position.x && input_state.mouse_position.x < width && 0.0 <= input_state.mouse_position.y && input_state.mouse_position.y < height {
-            color = [0.3, 0.4, 0.5, 1.0];
-        }
-
-        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: color });
-        self.contents.borrow().display(input_state, list);
-    }
-}
-
 
 pub struct Label {
-    text: String,
-    font: Rc<Font<'static>>,
-    scale: Scale,
+    text: &'static str,
     glyphs: Vec<PositionedGlyph<'static>>,
-    height: f32,
-    width: f32,
+    bounds: BoundingBox,
 }
 
 impl Label {
-    pub fn new(text: &str, font: Rc<Font<'static>>) -> Rc<RefCell<Label>> {
-        let mut label = Label {
-            text: String::new(),
-            font: font,
-            scale: Scale::uniform(14.0),
-            glyphs: Vec::with_capacity(text.len()),
-            width: 0.0,
-            height: 0.0,
-        };
-        label.set_text(text);
-        Rc::new(RefCell::new(label))
+    pub fn with_text(text: &'static str) -> impl Fn(Context<Label>) -> Label {
+        move |ctx| {
+            let resources = ctx.resources();
+            let text_style = resources.get_style::<TextStyle>();
+            let font = resources.get_resource::<Font>(text_style.font);
+
+            let mut label = Label {
+                text: text,
+                glyphs: Vec::new(),
+                bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
+            };
+            label.bounds.size = label.layout(text_style.scale, font, Point::new(0.0, 0.0));
+
+            label
+        }
     }
 
-    pub fn set_text(&mut self, text: &str) {
-        self.text.clear();
-        self.text.push_str(text);
-        self.layout_text();
-    }
-
-    pub fn modify_text<F>(&mut self, closure: F) where F: 'static + Fn(&mut String) {
-        closure(&mut self.text);
-        self.layout_text();
-    }
-
-    pub fn get_text(&self) -> &str {
-        &self.text
-    }
-
-    fn layout_text(&mut self) {
+    fn layout(&mut self, scale: Scale, font: &Font, pos: Point) -> Point {
         use unicode_normalization::UnicodeNormalization;
         self.glyphs.clear();
 
-        let v_metrics = self.font.v_metrics(self.scale);
-        let mut caret = point(0.0, v_metrics.ascent);
+        let v_metrics = font.v_metrics(scale);
+        let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
+        let mut caret = point(pos.x, pos.y + v_metrics.ascent);
         let mut last_glyph_id = None;
         for c in self.text.nfc() {
             if c.is_control() {
+                match c {
+                    '\r' => {
+                        // caret = point(pos.x, caret.y + advance_height);
+                    }
+                    '\n' => {},
+                    _ => {}
+                }
                 continue;
             }
-            let base_glyph = if let Some(glyph) = self.font.glyph(c) {
+            let base_glyph = if let Some(glyph) = font.glyph(c) {
                 glyph
             } else {
                 continue;
             };
             if let Some(id) = last_glyph_id.take() {
-                let glyph_width = self.font.pair_kerning(self.scale, id, base_glyph.id());
-                caret.x += glyph_width;
+                caret.x += font.pair_kerning(scale, id, base_glyph.id());
             }
             last_glyph_id = Some(base_glyph.id());
-            let glyph = base_glyph.scaled(self.scale).positioned(caret);
+            let mut glyph = base_glyph.scaled(scale).positioned(caret);
+            // if let Some(bb) = glyph.pixel_bounding_box() {
+            //     if bb.max.x > (pos.x + size.x) as i32 {
+            //         caret = point(pos.x, caret.y + advance_height);
+            //         glyph = glyph.into_unpositioned().positioned(caret);
+            //         last_glyph_id = None;
+            //     }
+            // }
             caret.x += glyph.unpositioned().h_metrics().advance_width;
-
             self.glyphs.push(glyph.standalone());
         }
 
-        self.height = v_metrics.ascent - v_metrics.descent;
-        self.width = caret.x;
+        Point::new(caret.x - pos.x, v_metrics.ascent - v_metrics.descent)
     }
-
 }
 
-impl Widget for Label {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-
+impl Element for Label {
+    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
+        self.bounds
     }
 
-    fn get_min_size(&self) -> (f32, f32) {
-        (self.width, self.height)
+    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+        let text_style = resources.get_style::<TextStyle>();
+        let font = resources.get_resource::<Font>(text_style.font);
+        self.bounds.size = self.layout(text_style.scale, font, bounds.pos);
+        BoundingBox { pos: bounds.pos, size: self.bounds.size }
     }
 
-    fn get_size(&self) -> (f32, f32) {
-        (self.width, self.height)
-    }
+    fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
+        let box_style = resources.get_style::<BoxStyle>();
 
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        Default::default()
-    }
-
-    fn display(&self, input_state: InputState, list: &mut DisplayList) {
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: box_style.color });
         for glyph in self.glyphs.iter() {
             list.glyph(glyph.standalone());
         }
@@ -812,214 +1114,237 @@ impl Widget for Label {
 }
 
 
-pub struct Textbox {
-    label: Rc<RefCell<Label>>,
-    on_change: Option<Box<Fn(&str)>>,
+pub struct Button;
+
+impl Button {
+    pub fn install(mut ctx: Context<Button>) -> Button {
+        let id = ctx.get_self();
+        ctx.register_slot(id);
+
+        ctx.receive::<InputEvent>(Button::handle);
+
+        Button
+    }
+
+    fn handle(&mut self, mut ctx: Context<Button>, evt: &InputEvent) {
+        if let InputEvent::MouseRelease { button: MouseButton::Left } = *evt {
+            ctx.fire(&ClickEvent);
+        }
+    }
 }
 
-impl Textbox {
-    pub fn new(font: Rc<Font<'static>>) -> Rc<RefCell<Textbox>> {
-        Rc::new(RefCell::new(Textbox { label: Label::new("", font), on_change: None }))
-    }
+pub struct ClickEvent;
 
-    pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(&str) {
-        self.on_change = Some(Box::new(callback));
-    }
-}
+impl Element for Button {
+    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
 
-impl Widget for Textbox {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.label.borrow_mut().set_container_size(width, height);
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        self.label.borrow().get_size()
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        let (width, height) = self.label.borrow().get_size();
-        (width.max(40.0), height)
-    }
-
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        match ev {
-            InputEvent::KeyPress { button: KeyboardButton::Back } => {
-                let mut label = self.label.borrow_mut();
-                label.modify_text(|text| { text.pop(); () });
-                if let Some(ref on_change) = self.on_change {
-                    on_change(label.get_text());
-                }
-            }
-            InputEvent::TextInput { character: c } => {
-                if !c.is_control() {
-                    let mut label = self.label.borrow_mut();
-                    label.modify_text(move |text| text.push(c));
-                    if let Some(ref on_change) = self.on_change {
-                        on_change(label.get_text());
-                    }
-                }
-            }
-            _ => {}
+        let mut width = 0.0f32;
+        let mut height = 0.0f32;
+        for child_box in children {
+            width = width.max(child_box.size.x);
+            height = height.max(child_box.size.y);
         }
 
-        Default::default()
+        width += 2.0 * box_style.padding;
+        height += 2.0 * box_style.padding;
+
+        BoundingBox { pos: Point::new(0.0, 0.0), size: Point::new(width, height) }
     }
 
-    fn display(&self, input_state: InputState, list: &mut DisplayList) {
-        let color = [0.1, 0.15, 0.2, 1.0];
-        let (width, height) = self.get_size();
-        list.rect(Rect { x: 0.0, y: 0.0, w: width.max(40.0), h: height, color: color });
+    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
 
-        self.label.borrow().display(input_state, list);
-    }
-}
-
-
-pub struct IntegerInput {
-    value: i32,
-    new_value: Option<i32>,
-    on_change: Option<Box<Fn(i32)>>,
-    format: Option<Box<Fn(i32) -> String>>,
-    container: Rc<RefCell<Container>>,
-    label: Rc<RefCell<Label>>,
-}
-
-impl IntegerInput {
-    pub fn new(value: i32, font: Rc<Font<'static>>) -> Rc<RefCell<IntegerInput>> {
-        let label = Label::new(&value.to_string(), font);
-        let container = Container::new(label.clone());
-        container.borrow_mut().get_style().padding = 2.0;
-        Rc::new(RefCell::new(IntegerInput { value: value, new_value: None, on_change: None, format: None, container: container, label: label }))
-    }
-
-    pub fn set_value(&mut self, value: i32) {
-        self.value = value;
-        self.render_text(value);
-    }
-
-    pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(i32) {
-        self.on_change = Some(Box::new(callback));
-    }
-
-    pub fn format<F>(&mut self, callback: F) where F: 'static + Fn(i32) -> String {
-        self.label.borrow_mut().set_text(&callback(self.value));
-        self.format = Some(Box::new(callback));
-    }
-
-    fn render_text(&mut self, value: i32) {
-        let text = if let Some(ref format) = self.format {
-            format(value)
-        } else {
-            value.to_string()
-        };
-        self.label.borrow_mut().set_text(&text);
-    }
-}
-
-impl Widget for IntegerInput {
-    fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
-        self.container.borrow_mut().set_container_size(width, height);
-    }
-
-    fn get_min_size(&self) -> (f32, f32) {
-        self.container.borrow().get_min_size()
-    }
-
-    fn get_size(&self) -> (f32, f32) {
-        self.container.borrow().get_size()
-    }
-
-    fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
-        match ev {
-            InputEvent::CursorMoved { position } => {
-                if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
-                    let dy = -(input_state.mouse_position.y - mouse_drag_origin.y);
-                    let new_value = self.value + (dy / 8.0) as i32;
-                    self.new_value = Some(new_value);
-                    self.render_text(new_value);
-                    if let Some(ref on_change) = self.on_change {
-                        on_change(new_value);
-                    }
-                    return EventResponse {
-                        capture_mouse: true,
-                        capture_mouse_position: true,
-                        mouse_cursor: MouseCursor::NoneCursor,
-                        ..Default::default()
-                    };
-                }
-            }
-            InputEvent::MouseRelease { button: MouseButton::Left } => {
-                if let Some(new_value) = self.new_value {
-                    self.value = new_value;
-                    self.new_value = None;
-                }
-            }
-            _ => {}
+        for child_box in children.iter_mut() {
+            child_box.pos = bounds.pos;
+            child_box.pos.x += box_style.padding;
+            child_box.pos.y += box_style.padding;
+            child_box.size.x = bounds.size.x - box_style.padding * 2.0;
+            child_box.size.y = bounds.size.y - box_style.padding * 2.0;
         }
 
-        Default::default()
+        bounds
     }
 
-    fn display(&self, input_state: InputState, list: &mut DisplayList) {
-        self.container.borrow().display(input_state, list);
+    fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
+        let box_style = resources.get_style::<BoxStyle>();
+
+        let mut color = [0.15, 0.18, 0.23, 1.0];
+        if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
+            if bounds.contains_point(mouse_drag_origin) {
+                color = [0.02, 0.2, 0.6, 1.0];
+            }
+        } else if bounds.contains_point(input_state.mouse_position) {
+            color = [0.3, 0.4, 0.5, 1.0];
+        }
+
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: color });
     }
 }
 
 
-fn layout_paragraph<'a>(font: &'a Font,
-                        scale: Scale,
-                        x: f32,
-                        y: f32,
-                        width: u32,
-                        text: &str) -> Vec<PositionedGlyph<'a>> {
-    use unicode_normalization::UnicodeNormalization;
-    let mut result = Vec::new();
-    let v_metrics = font.v_metrics(scale);
-    let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
-    let mut caret = point(x, y + v_metrics.ascent);
-    let mut last_glyph_id = None;
-    for c in text.nfc() {
-        if c.is_control() {
-            match c {
-                '\r' => {
-                    caret = point(x, caret.y + advance_height);
-                }
-                '\n' => {},
-                _ => {}
-            }
-            continue;
-        }
-        let base_glyph = if let Some(glyph) = font.glyph(c) {
-            glyph
-        } else {
-            continue;
-        };
-        if let Some(id) = last_glyph_id.take() {
-            caret.x += font.pair_kerning(scale, id, base_glyph.id());
-        }
-        last_glyph_id = Some(base_glyph.id());
-        let mut glyph = base_glyph.scaled(scale).positioned(caret);
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            if bb.max.x > width as i32 {
-                caret = point(x, caret.y + advance_height);
-                glyph = glyph.into_unpositioned().positioned(caret);
-                last_glyph_id = None;
-            }
-        }
-        caret.x += glyph.unpositioned().h_metrics().advance_width;
-        result.push(glyph);
-    }
-    result
-}
+// pub struct Textbox {
+//     label: Rc<RefCell<Label>>,
+//     on_change: Option<Box<Fn(&str)>>,
+// }
 
-#[derive(Copy, Clone)]
+// impl Textbox {
+//     pub fn new(font: Rc<Font<'static>>) -> Rc<RefCell<Textbox>> {
+//         Rc::new(RefCell::new(Textbox { label: Label::new("", font), on_change: None }))
+//     }
+
+//     pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(&str) {
+//         self.on_change = Some(Box::new(callback));
+//     }
+// }
+
+// impl Element for Textbox {
+//     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+//         self.label.borrow_mut().set_container_size(width, height);
+//     }
+
+//     fn get_min_size(&self) -> (f32, f32) {
+//         self.label.borrow().get_size()
+//     }
+
+//     fn get_size(&self) -> (f32, f32) {
+//         let (width, height) = self.label.borrow().get_size();
+//         (width.max(40.0), height)
+//     }
+
+//     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
+//         match ev {
+//             InputEvent::KeyPress { button: KeyboardButton::Back } => {
+//                 let mut label = self.label.borrow_mut();
+//                 label.modify_text(|text| { text.pop(); () });
+//                 if let Some(ref on_change) = self.on_change {
+//                     on_change(label.get_text());
+//                 }
+//             }
+//             InputEvent::TextInput { character: c } => {
+//                 if !c.is_control() {
+//                     let mut label = self.label.borrow_mut();
+//                     label.modify_text(move |text| text.push(c));
+//                     if let Some(ref on_change) = self.on_change {
+//                         on_change(label.get_text());
+//                     }
+//                 }
+//             }
+//             _ => {}
+//         }
+
+//         Default::default()
+//     }
+
+//     fn display(&self, input_state: InputState, list: &mut DisplayList) {
+//         let color = [0.1, 0.15, 0.2, 1.0];
+//         let (width, height) = self.get_size();
+//         list.rect(Rect { x: 0.0, y: 0.0, w: width.max(40.0), h: height, color: color });
+
+//         self.label.borrow().display(input_state, list);
+//     }
+// }
+
+
+// pub struct IntegerInput {
+//     value: i32,
+//     new_value: Option<i32>,
+//     on_change: Option<Box<Fn(i32)>>,
+//     format: Option<Box<Fn(i32) -> String>>,
+//     container: Rc<RefCell<Container>>,
+//     label: Rc<RefCell<Label>>,
+// }
+
+// impl IntegerInput {
+//     pub fn new(value: i32, font: Rc<Font<'static>>) -> Rc<RefCell<IntegerInput>> {
+//         let label = Label::new(&value.to_string(), font);
+//         let container = Container::new(label.clone());
+//         container.borrow_mut().get_style().padding = 2.0;
+//         Rc::new(RefCell::new(IntegerInput { value: value, new_value: None, on_change: None, format: None, container: container, label: label }))
+//     }
+
+//     pub fn set_value(&mut self, value: i32) {
+//         self.value = value;
+//         self.render_text(value);
+//     }
+
+//     pub fn on_change<F>(&mut self, callback: F) where F: 'static + Fn(i32) {
+//         self.on_change = Some(Box::new(callback));
+//     }
+
+//     pub fn format<F>(&mut self, callback: F) where F: 'static + Fn(i32) -> String {
+//         self.label.borrow_mut().set_text(&callback(self.value));
+//         self.format = Some(Box::new(callback));
+//     }
+
+//     fn render_text(&mut self, value: i32) {
+//         let text = if let Some(ref format) = self.format {
+//             format(value)
+//         } else {
+//             value.to_string()
+//         };
+//         self.label.borrow_mut().set_text(&text);
+//     }
+// }
+
+// impl Element for IntegerInput {
+//     fn set_container_size(&mut self, width: Option<f32>, height: Option<f32>) {
+//         self.container.borrow_mut().set_container_size(width, height);
+//     }
+
+//     fn get_min_size(&self) -> (f32, f32) {
+//         self.container.borrow().get_min_size()
+//     }
+
+//     fn get_size(&self) -> (f32, f32) {
+//         self.container.borrow().get_size()
+//     }
+
+//     fn handle_event(&mut self, ev: InputEvent, input_state: InputState) -> EventResponse {
+//         match ev {
+//             InputEvent::CursorMoved { position } => {
+//                 if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
+//                     let dy = -(input_state.mouse_position.y - mouse_drag_origin.y);
+//                     let new_value = self.value + (dy / 8.0) as i32;
+//                     self.new_value = Some(new_value);
+//                     self.render_text(new_value);
+//                     if let Some(ref on_change) = self.on_change {
+//                         on_change(new_value);
+//                     }
+//                     return EventResponse {
+//                         capture_mouse: true,
+//                         capture_mouse_position: true,
+//                         mouse_cursor: MouseCursor::NoneCursor,
+//                         ..Default::default()
+//                     };
+//                 }
+//             }
+//             InputEvent::MouseRelease { button: MouseButton::Left } => {
+//                 if let Some(new_value) = self.new_value {
+//                     self.value = new_value;
+//                     self.new_value = None;
+//                 }
+//             }
+//             _ => {}
+//         }
+
+//         Default::default()
+//     }
+
+//     fn display(&self, input_state: InputState, list: &mut DisplayList) {
+//         self.container.borrow().display(input_state, list);
+//     }
+// }
+
+
+#[derive(Copy, Clone, Debug)]
 pub enum MouseButton {
     Left,
     Middle,
     Right,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum KeyboardButton {
     Key1,
     Key2,
@@ -1415,8 +1740,14 @@ impl MouseCursor {
 
 use std::ops;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Point { pub x: f32, pub y: f32 }
+
+impl Point {
+    pub fn new(x: f32, y: f32) -> Point {
+        Point { x: x, y: y }
+    }
+}
 
 impl ops::Add for Point {
     type Output = Point;
@@ -1461,5 +1792,18 @@ impl ops::Mul<Point> for f32 {
 impl ops::MulAssign<f32> for Point {
     fn mul_assign(&mut self, other: f32) {
         *self = *self * other;
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct BoundingBox { pub pos: Point, pub size: Point }
+
+impl BoundingBox {
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> BoundingBox {
+        BoundingBox { pos: Point { x: x, y: y }, size: Point { x: w, y: h } }
+    }
+
+    pub fn contains_point(&self, point: Point) -> bool {
+        point.x > self.pos.x && point.x < self.pos.x + self.size.x && point.y > self.pos.y && point.y < self.pos.y + self.size.y
     }
 }
