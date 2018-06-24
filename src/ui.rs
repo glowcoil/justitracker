@@ -43,6 +43,12 @@ pub trait Element {
     fn type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
 }
 
+impl Element {
+    unsafe fn downcast_mut_unchecked<E: Element>(&mut self) -> &mut E {
+        &mut *(self as *mut Element as *mut E)
+    }
+}
+
 pub struct UI {
     width: f32,
     height: f32,
@@ -136,7 +142,7 @@ impl UI {
 
     /* element tree */
 
-    pub fn place_root<'a, E, I>(&'a mut self, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context) -> E {
+    pub fn place_root<'a, E, I>(&'a mut self, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         let root = self.root;
 
         self.remove_element(root);
@@ -158,7 +164,7 @@ impl UI {
         self.slots.insert(element, slot);
     }
 
-    fn add_child<E, I>(&mut self, parent: ElementRef, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context) -> E {
+    fn add_child<E, I>(&mut self, parent: ElementRef, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         let child_id = self.get_next_id();
         self.hookup_element(child_id);
         self.setup_element_styles(child_id);
@@ -172,7 +178,7 @@ impl UI {
         child_id
     }
 
-    fn insert_child<E, I>(&mut self, parent: ElementRef, index: usize, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context) -> E {
+    fn insert_child<E, I>(&mut self, parent: ElementRef, index: usize, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         let child_id = self.get_next_id();
         self.hookup_element(child_id);
         self.setup_element_styles(child_id);
@@ -332,25 +338,33 @@ impl UI {
     /* event handling */
 
     pub fn send<M: 'static>(&mut self, receiver: ElementRef, message: M) {
-        if let Some(callback) = self.receivers.get_mut(&receiver).expect("invalid element id").remove::<Box<Fn(Context, M)>>() {
-            callback(Context::new(self, receiver), message);
-            self.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(Context, M)>>(callback);
+        if let Some(callback) = self.receivers.get_mut(&receiver).expect("invalid element id").remove::<Box<Fn(&mut UI, M)>>() {
+            callback(self, message);
+            self.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(&mut UI, M)>>(callback);
         }
     }
 
-    fn receive<M: 'static, F: Fn(Context, M) + 'static>(&mut self, receiver: ElementRef, callback: F) {
-        self.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(Context, M)>>(Box::new(callback));
+    fn receive<E: Element + 'static, M: 'static, F: Fn(&mut E, Context<E>, M) + 'static>(&mut self, receiver: ElementRef, callback: F) {
+        self.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(&mut UI, M)>>(Box::new(move |ui, message| {
+            let mut element = ui.elements.remove(&receiver).unwrap();
+            callback(unsafe { element.downcast_mut_unchecked::<E>() }, Context::new(ui, receiver), message);
+            ui.elements.insert(receiver, element);
+        }));
     }
 
-    fn fire<Ev: Clone + 'static>(&mut self, source: ElementRef, event: Ev) {
-        if let Some((listener, callback)) = self.listeners.get_mut(&source).expect("invalid element id").remove::<(ElementRef, Box<Fn(Context, Ev)>)>() {
-            callback(Context::new(self, listener), event);
-            self.listeners.get_mut(&source).expect("invalid element id").insert::<(ElementRef, Box<Fn(Context, Ev)>)>((listener, callback));
+    fn fire<Ev: 'static>(&mut self, source: ElementRef, event: Ev) {
+        if let Some(callback) = self.listeners.get_mut(&source).expect("invalid element id").remove::<Box<Fn(&mut UI, Ev)>>() {
+            callback(self, event);
+            self.listeners.get_mut(&source).expect("invalid element id").insert::<Box<Fn(&mut UI, Ev)>>(callback);
         }
     }
 
-    fn listen<Ev: 'static, F: Fn(Context, Ev) + 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: F) {
-        self.listeners.get_mut(&source).expect("invalid element id").insert::<(ElementRef, Box<Fn(Context, Ev)>)>((listener, Box::new(callback)));
+    fn listen<E: Element + 'static, Ev: 'static, F: Fn(&mut E, Context<E>, Ev) + 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: F) {
+        self.listeners.get_mut(&source).expect("invalid element id").insert::<Box<Fn(&mut UI, Ev)>>(Box::new(move |ui, event| {
+            let mut element = ui.elements.remove(&listener).unwrap();
+            callback(unsafe { element.downcast_mut_unchecked::<E>() }, Context::new(ui, listener), event);
+            ui.elements.insert(listener, element);
+        }));
     }
 
     pub fn set_modifiers(&mut self, modifiers: KeyboardModifiers) {
@@ -416,7 +430,7 @@ impl UI {
 
         if let Some(handler) = handler {
             let mut handler = handler;
-            while self.parents.contains_key(&handler) && !self.receivers.get(&handler).expect("invalid element id").contains::<Box<Fn(Context, InputEvent)>>() {
+            while self.parents.contains_key(&handler) && !self.receivers.get(&handler).expect("invalid element id").contains::<Box<Fn(&mut UI, InputEvent)>>() {
                 handler = *self.parents.get(&handler).expect("invalid element id");
             }
             self.send(handler, ev);
@@ -539,16 +553,18 @@ impl UI {
     }
 }
 
-pub struct Context<'a> {
+pub struct Context<'a, E: Element + 'static> {
     ui: &'a mut UI,
     element: ElementRef,
+    phantom_data: PhantomData<E>,
 }
 
-impl<'a> Context<'a> {
-    fn new(ui: &'a mut UI, element: ElementRef) -> Context<'a> {
+impl<'a, E: Element + 'static> Context<'a, E> {
+    fn new(ui: &'a mut UI, element: ElementRef) -> Context<'a, E> {
         Context {
             ui: ui,
             element: element,
+            phantom_data: PhantomData
         }
     }
 
@@ -572,16 +588,16 @@ impl<'a> Context<'a> {
         self.ui.send::<M>(element, message);
     }
 
-    pub fn receive<M: 'static, F: Fn(Context, M) + 'static>(&mut self, callback: F) {
-        self.ui.receive::<M, F>(self.element, callback);
+    pub fn receive<M: 'static, F: Fn(&mut E, Context<E>, M) + 'static>(&mut self, callback: F) {
+        self.ui.receive::<E, M, F>(self.element, callback);
     }
 
     pub fn fire<Ev: Clone + 'static>(&mut self, event: Ev) {
         self.ui.fire::<Ev>(self.element, event);
     }
 
-    pub fn listen<Ev: 'static, F: Fn(Context, Ev) + 'static>(&mut self, element: ElementRef, callback: F) {
-        self.ui.listen::<Ev, F>(self.element, element, callback);
+    pub fn listen<Ev: 'static, F: Fn(&mut E, Context<E>, Ev) + 'static>(&mut self, element: ElementRef, callback: F) {
+        self.ui.listen::<E, Ev, F>(self.element, element, callback);
     }
 
     pub fn set_element_style<P: Patch>(&mut self, element: usize, style: P::PatchType) {
@@ -592,7 +608,7 @@ impl<'a> Context<'a> {
         self.ui.input_state
     }
 
-    pub fn resources<E: Element + 'static>(&self) -> Resources {
+    pub fn resources(&self) -> Resources {
         Resources::new(self.element, TypeId::of::<E>(), &self.ui)
     }
 }
@@ -610,11 +626,11 @@ impl<'a> Slot<'a> {
         }
     }
 
-    pub fn add_child<E, I>(&mut self, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context) -> E {
+    pub fn add_child<E, I>(&mut self, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         self.ui.add_child(self.element, install)
     }
 
-    pub fn insert_child<E, I>(&mut self, index: usize, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context) -> E {
+    pub fn insert_child<E, I>(&mut self, index: usize, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         self.ui.insert_child(self.element, index, install)
     }
 
@@ -902,7 +918,7 @@ impl BoxStyle {
 pub struct Stack;
 
 impl Stack {
-    pub fn install(mut ctx: Context) -> Stack {
+    pub fn install(mut ctx: Context<Stack>) -> Stack {
         let id = ctx.get_self();
         ctx.register_slot(id);
         Stack
@@ -1055,10 +1071,10 @@ pub struct Label {
 }
 
 impl Label {
-    pub fn with_text<S>(text: S) -> impl FnOnce(Context) -> Label where S: Into<Cow<'static, str>> {
+    pub fn with_text<S>(text: S) -> impl FnOnce(Context<Label>) -> Label where S: Into<Cow<'static, str>> {
         move |mut ctx| {
             let label = {
-                let resources = ctx.resources::<Label>();
+                let resources = ctx.resources();
                 let box_style = resources.get_style::<BoxStyle>();
                 let text_style = resources.get_style::<TextStyle>();
                 let font = resources.get_resource::<Font>(text_style.font);
@@ -1073,13 +1089,13 @@ impl Label {
                 label
             };
 
-            // ctx.receive::<String>(|myself: &mut Label, ctx, s: String| {
-            //     myself.text = s.into();
-            // });
+            ctx.receive(|myself: &mut Label, ctx, s: String| {
+                myself.text = s.into();
+            });
 
-            // ctx.receive::<&'static str>(|myself: &mut Label, ctx, s: &'static str| {
-            //     myself.text = s.into();
-            // });
+            ctx.receive(|myself: &mut Label, ctx, s: &'static str| {
+                myself.text = s.into();
+            });
 
             label
         }
@@ -1157,16 +1173,16 @@ impl Element for Label {
 pub struct Button;
 
 impl Button {
-    pub fn install(mut ctx: Context) -> Button {
+    pub fn install(mut ctx: Context<Button>) -> Button {
         let id = ctx.get_self();
         ctx.register_slot(id);
 
-        // ctx.receive::<InputEvent>(Button::handle);
+        ctx.receive(Button::handle);
 
         Button
     }
 
-    fn handle(&mut self, mut ctx: Context, evt: InputEvent) {
+    fn handle(&mut self, mut ctx: Context<Button>, evt: InputEvent) {
         if let InputEvent::MouseRelease { button: MouseButton::Left } = evt {
             ctx.fire(&ClickEvent);
         }

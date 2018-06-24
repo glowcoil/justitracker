@@ -186,7 +186,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn install(mut ctx: Context) -> Grid {
+    fn install(mut ctx: Context<Grid>) -> Grid {
         let root = ctx.subtree().add_child(Stack::install);
 
         ctx.set_element_style::<StackStyle>(root, StackStyle::axis(Axis::Vertical));
@@ -196,11 +196,11 @@ impl Grid {
 
         let play_button = ctx.get_slot(controls_row).add_child(Button::install);
         ctx.get_slot(play_button).add_child(Label::with_text("play"));
-        // ctx.listen(play_button, |myself: &mut Grid, ctx, evt: &ClickEvent| myself.audio_send.send(AudioMessage::Play).unwrap());
+        ctx.listen(play_button, |myself: &mut Grid, ctx, evt: &ClickEvent| myself.audio_send.send(AudioMessage::Play).unwrap());
 
         let stop_button = ctx.get_slot(controls_row).add_child(Button::install);
         ctx.get_slot(stop_button).add_child(Label::with_text("stop"));
-        // ctx.listen(stop_button, |myself: &mut Grid, ctx, evt: &ClickEvent| myself.audio_send.send(AudioMessage::Stop).unwrap());
+        ctx.listen(stop_button, |myself: &mut Grid, ctx, evt: &ClickEvent| myself.audio_send.send(AudioMessage::Stop).unwrap());
 
         let bpm_label = ctx.get_slot(controls_row).add_child(Label::with_text("bpm:"));
         ctx.set_element_style::<BoxStyle>(bpm_label, BoxStyle::v_align(Align::Center));
@@ -220,18 +220,18 @@ impl Grid {
             let buttons = ctx.get_slot(column).add_child(Stack::install);
             let load_sample_button = ctx.get_slot(buttons).add_child(Button::install);
             ctx.get_slot(load_sample_button).add_child(Label::with_text("inst"));
-            // ctx.listen(load_sample_button, |myself: &mut Grid, ctx, evt: &ClickEvent| {
-            //     if let Ok(result) = nfd::dialog().filter("wav").open() {
-            //         match result {
-            //             nfd::Response::Okay(path) => {
-            //                 let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
-            //                 myself.song.samples[0] = samples;
-            //                 myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-            //             }
-            //             _ => {}
-            //         }
-            //     }
-            // });
+            ctx.listen(load_sample_button, move |myself: &mut Grid, ctx, evt: &ClickEvent| {
+                if let Ok(result) = nfd::dialog().filter("wav").open() {
+                    match result {
+                        nfd::Response::Okay(path) => {
+                            let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
+                            myself.song.samples[i] = samples;
+                            myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+            });
 
             let del_button = ctx.get_slot(buttons).add_child(Button::install);
             ctx.get_slot(del_button).add_child(Label::with_text("del"));
@@ -265,116 +265,116 @@ impl Grid {
         }
     }
 
-    fn handle(mut ctx: Context, evt: InputEvent) {
-        // match evt {
-        //     InputEvent::KeyPress { button } => {
-        //         match button {
-        //             KeyboardButton::Up => {
-        //                 if self.cursor.1 > 0 {
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
-        //                     self.cursor.1 -= 1;
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
-        //                 }
-        //             }
-        //             KeyboardButton::Down => {
-        //                 if self.cursor.1 < self.note_grid[0].len().checked_sub(1).unwrap_or(0) {
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
-        //                     self.cursor.1 += 1;
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
-        //                 }
-        //             }
-        //             KeyboardButton::Left => {
-        //                 if self.cursor.0 > 0 {
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
-        //                     self.cursor.0 -= 1;
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
-        //                 }
-        //             }
-        //             KeyboardButton::Right => {
-        //                 if self.cursor.0 < self.note_grid.len().checked_sub(1).unwrap_or(0) {
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
-        //                     self.cursor.0 += 1;
-        //                     ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
-        //                 }
+    fn handle(&mut self, mut ctx: Context<Grid>, evt: InputEvent) {
+        match evt {
+            InputEvent::KeyPress { button } => {
+                match button {
+                    KeyboardButton::Up => {
+                        if self.cursor.1 > 0 {
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
+                            self.cursor.1 -= 1;
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
+                        }
+                    }
+                    KeyboardButton::Down => {
+                        if self.cursor.1 < self.note_grid[0].len().checked_sub(1).unwrap_or(0) {
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
+                            self.cursor.1 += 1;
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
+                        }
+                    }
+                    KeyboardButton::Left => {
+                        if self.cursor.0 > 0 {
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
+                            self.cursor.0 -= 1;
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
+                        }
+                    }
+                    KeyboardButton::Right => {
+                        if self.cursor.0 < self.note_grid.len().checked_sub(1).unwrap_or(0) {
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
+                            self.cursor.0 += 1;
+                            ctx.set_element_style::<BoxStyle>(self.note_grid[self.cursor.0][self.cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
+                        }
 
-        //             }
-        //             KeyboardButton::Key1 => {
-        //                 if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
-        //                     self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
-        //                 }
-        //                 match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
-        //                     Some(note) => {
-        //                         if ctx.get_input_state().modifiers.shift {
-        //                             note[0] -= 1;
-        //                         } else {
-        //                             note[0] += 1;
-        //                         }
-        //                         let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(0).unwrap();
-        //                         ctx.send::<String>(factor, format!("{:02}", note[0]));
-        //                     }
-        //                     None => {}
-        //                 }
-        //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-        //             }
-        //             KeyboardButton::Key2 => {
-        //                 if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
-        //                     self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
-        //                 }
-        //                 match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
-        //                     Some(note) => {
-        //                         if ctx.get_input_state().modifiers.shift {
-        //                             note[1] -= 1;
-        //                         } else {
-        //                             note[1] += 1;
-        //                         }
-        //                         let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(1).unwrap();
-        //                         ctx.send::<String>(factor, format!("{:02}", note[1]));
-        //                     }
-        //                     None => {}
-        //                 }
-        //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-        //             }
-        //             KeyboardButton::Key3 => {
-        //                 if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
-        //                     self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
-        //                 }
-        //                 match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
-        //                     Some(note) => {
-        //                         if ctx.get_input_state().modifiers.shift {
-        //                             note[2] -= 1;
-        //                         } else {
-        //                             note[2] += 1;
-        //                         }
-        //                         let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(2).unwrap();
-        //                         ctx.send::<String>(factor, format!("{:02}", note[2]));
-        //                     }
-        //                     None => {}
-        //                 }
-        //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-        //             }
-        //             KeyboardButton::Key4 => {
-        //                 if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
-        //                     self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
-        //                 }
-        //                 match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
-        //                     Some(note) => {
-        //                         if ctx.get_input_state().modifiers.shift {
-        //                             note[3] -= 1;
-        //                         } else {
-        //                             note[3] += 1;
-        //                         }
-        //                         let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(3).unwrap();
-        //                         ctx.send::<String>(factor, format!("{:02}", note[3]));
-        //                     }
-        //                     None => {}
-        //                 }
-        //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-        //             }
-        //             _ => {}
-        //         }
-        //     }
-        //     _ => {}
-        // }
+                    }
+                    KeyboardButton::Key1 => {
+                        if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
+                            self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
+                        }
+                        match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
+                            Some(note) => {
+                                if ctx.get_input_state().modifiers.shift {
+                                    note[0] -= 1;
+                                } else {
+                                    note[0] += 1;
+                                }
+                                let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(0).unwrap();
+                                ctx.send::<String>(factor, format!("{:02}", note[0]));
+                            }
+                            None => {}
+                        }
+                        self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+                    }
+                    KeyboardButton::Key2 => {
+                        if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
+                            self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
+                        }
+                        match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
+                            Some(note) => {
+                                if ctx.get_input_state().modifiers.shift {
+                                    note[1] -= 1;
+                                } else {
+                                    note[1] += 1;
+                                }
+                                let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(1).unwrap();
+                                ctx.send::<String>(factor, format!("{:02}", note[1]));
+                            }
+                            None => {}
+                        }
+                        self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+                    }
+                    KeyboardButton::Key3 => {
+                        if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
+                            self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
+                        }
+                        match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
+                            Some(note) => {
+                                if ctx.get_input_state().modifiers.shift {
+                                    note[2] -= 1;
+                                } else {
+                                    note[2] += 1;
+                                }
+                                let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(2).unwrap();
+                                ctx.send::<String>(factor, format!("{:02}", note[2]));
+                            }
+                            None => {}
+                        }
+                        self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+                    }
+                    KeyboardButton::Key4 => {
+                        if self.song.notes[self.cursor.0][self.cursor.1].is_none() {
+                            self.song.notes[self.cursor.0][self.cursor.1] = Some(vec![0, 0, 0, 0]);
+                        }
+                        match self.song.notes[self.cursor.0][self.cursor.1].as_mut() {
+                            Some(note) => {
+                                if ctx.get_input_state().modifiers.shift {
+                                    note[3] -= 1;
+                                } else {
+                                    note[3] += 1;
+                                }
+                                let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(3).unwrap();
+                                ctx.send::<String>(factor, format!("{:02}", note[3]));
+                            }
+                            None => {}
+                        }
+                        self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
     }
 }
 
