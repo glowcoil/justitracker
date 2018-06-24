@@ -29,8 +29,14 @@ impl<R: 'static> ResourceRef<R> {
 }
 
 pub trait Element {
-    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox;
-    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox;
+    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
+        BoxStyle::measure(&box_style, children)
+    }
+    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
+        BoxStyle::arrange(&box_style, bounds, children)
+    }
     fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {}
 
     fn type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
@@ -873,6 +879,33 @@ impl Default for BoxStyle {
     }
 }
 
+impl BoxStyle {
+    fn measure(style: &BoxStyle, children: &[BoundingBox]) -> BoundingBox {
+        let mut width = 0.0f32;
+        let mut height = 0.0f32;
+        for child_box in children {
+            width = width.max(child_box.size.x);
+            height = height.max(child_box.size.y);
+        }
+
+        width += 2.0 * style.padding;
+        height += 2.0 * style.padding;
+
+        BoundingBox { pos: Point::new(0.0, 0.0), size: Point::new(width, height) }
+    }
+    fn arrange(style: &BoxStyle, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+        for child_box in children.iter_mut() {
+            child_box.pos = bounds.pos;
+            child_box.pos.x += style.padding;
+            child_box.pos.y += style.padding;
+            child_box.size.x = bounds.size.x - style.padding * 2.0;
+            child_box.size.y = bounds.size.y - style.padding * 2.0;
+        }
+
+        bounds
+    }
+}
+
 
 pub struct Stack;
 
@@ -1136,36 +1169,6 @@ impl Button {
 pub struct ClickEvent;
 
 impl Element for Button {
-    fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
-        let box_style = resources.get_style::<BoxStyle>();
-
-        let mut width = 0.0f32;
-        let mut height = 0.0f32;
-        for child_box in children {
-            width = width.max(child_box.size.x);
-            height = height.max(child_box.size.y);
-        }
-
-        width += 2.0 * box_style.padding;
-        height += 2.0 * box_style.padding;
-
-        BoundingBox { pos: Point::new(0.0, 0.0), size: Point::new(width, height) }
-    }
-
-    fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
-        let box_style = resources.get_style::<BoxStyle>();
-
-        for child_box in children.iter_mut() {
-            child_box.pos = bounds.pos;
-            child_box.pos.x += box_style.padding;
-            child_box.pos.y += box_style.padding;
-            child_box.size.x = bounds.size.x - box_style.padding * 2.0;
-            child_box.size.y = bounds.size.y - box_style.padding * 2.0;
-        }
-
-        bounds
-    }
-
     fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
         let box_style = resources.get_style::<BoxStyle>();
 
