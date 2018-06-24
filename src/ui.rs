@@ -5,6 +5,7 @@ use std::any::{Any, TypeId};
 use std::marker::PhantomData;
 use std::mem;
 use std::borrow::BorrowMut;
+use std::borrow::Cow;
 
 use std::f32;
 
@@ -1079,24 +1080,37 @@ impl Default for TextStyle {
 }
 
 pub struct Label {
-    text: &'static str,
+    text: Cow<'static, str>,
     glyphs: Vec<PositionedGlyph<'static>>,
     size: Point,
 }
 
 impl Label {
-    pub fn with_text(text: &'static str) -> impl Fn(Context<Label>) -> Label {
-        move |ctx| {
-            let resources = ctx.resources();
-            let text_style = resources.get_style::<TextStyle>();
-            let font = resources.get_resource::<Font>(text_style.font);
+    pub fn with_text<S>(text: S) -> impl FnOnce(Context<Label>) -> Label where S: Into<Cow<'static, str>> {
+        move |mut ctx| {
+            let label = {
+                let resources = ctx.resources();
+                let box_style = resources.get_style::<BoxStyle>();
+                let text_style = resources.get_style::<TextStyle>();
+                let font = resources.get_resource::<Font>(text_style.font);
 
-            let mut label = Label {
-                text: text,
-                glyphs: Vec::new(),
-                bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
+                let mut label = Label {
+                    text: text.into(),
+                    glyphs: Vec::new(),
+                    size: Point::new(0.0, 0.0),
+                };
+                label.size = label.layout(text_style.scale, font, Point::new(box_style.padding, box_style.padding));
+
+                label
             };
-            label.bounds.size = label.layout(text_style.scale, font, Point::new(0.0, 0.0));
+
+            ctx.receive::<String>(|myself: &mut Label, ctx, s: String| {
+                myself.text = s.into();
+            });
+
+            ctx.receive::<&'static str>(|myself: &mut Label, ctx, s: &'static str| {
+                myself.text = s.into();
+            });
 
             label
         }
