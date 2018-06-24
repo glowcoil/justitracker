@@ -1081,7 +1081,7 @@ impl Default for TextStyle {
 pub struct Label {
     text: &'static str,
     glyphs: Vec<PositionedGlyph<'static>>,
-    bounds: BoundingBox,
+    size: Point,
 }
 
 impl Label {
@@ -1148,14 +1148,16 @@ impl Label {
 
 impl Element for Label {
     fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
-        self.bounds
+        let box_style = resources.get_style::<BoxStyle>();
+        BoundingBox { pos: Point::new(0.0, 0.0), size: self.size + Point::new(2.0 * box_style.padding, 2.0 * box_style.padding) }
     }
 
     fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+        let box_style = resources.get_style::<BoxStyle>();
         let text_style = resources.get_style::<TextStyle>();
         let font = resources.get_resource::<Font>(text_style.font);
-        self.bounds.size = self.layout(text_style.scale, font, bounds.pos);
-        BoundingBox { pos: bounds.pos, size: self.bounds.size }
+        self.size = self.layout(text_style.scale, font, bounds.pos + Point::new(box_style.padding, box_style.padding));
+        BoundingBox { pos: bounds.pos, size: self.size + Point::new(2.0 * box_style.padding, 2.0 * box_style.padding) }
     }
 
     fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
