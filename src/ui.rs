@@ -61,8 +61,7 @@ pub struct UI {
     element_classes: HashMap<ElementRef, Vec<ClassRef>>,
 
     receivers: HashMap<ElementRef, HashMap<TypeId, fn(&mut (), Context<()>, &())>>,
-    listeners: HashMap<ElementRef, HashMap<TypeId, HashMap<ElementRef, fn(&mut (), Context<()>, &())>>>,
-    listening: HashMap<ElementRef, HashMap<ElementRef, HashSet<TypeId>>>,
+    listeners: HashMap<ElementRef, HashMap<TypeId, (ElementRef, fn(&mut (), Context<()>, &()))>>,
 
     global_styles: AnyMap,
     global_element_styles: HashMap<TypeId, AnyMap>,
@@ -97,7 +96,6 @@ impl UI {
 
             receivers: HashMap::new(),
             listeners: HashMap::new(),
-            listening: HashMap::new(),
 
             global_styles: AnyMap::new(),
             global_element_styles: HashMap::new(),
@@ -212,7 +210,6 @@ impl UI {
         self.layout.insert(element, BoundingBox::new(0.0, 0.0, 0.0, 0.0));
         self.receivers.insert(element, HashMap::new());
         self.listeners.insert(element, HashMap::new());
-        self.listening.insert(element, HashMap::new());
     }
 
     fn setup_element_styles(&mut self, element: usize) {
@@ -225,13 +222,6 @@ impl UI {
         self.layout.remove(&element);
         self.receivers.remove(&element);
         self.listeners.remove(&element);
-        let listening = self.listening.remove(&element).expect("invalid element id");
-        for (source, events) in listening {
-            let source = self.listeners.get_mut(&source).expect("invalid element id");
-            for event in events {
-                source.remove(&event);
-            }
-        }
         let children = self.children.remove(&element).expect("invalid element id");
         for child in children {
             self.remove_element(child);
@@ -359,27 +349,20 @@ impl UI {
     }
 
     fn fire<Ev: Clone + 'static>(&mut self, source: ElementRef, event: Ev) {
-        let listeners = if let Some(listeners) = self.listeners.get(&source).expect("invalid element id").get(&TypeId::of::<Ev>()) {
-            listeners.clone()
+        let (listener, callback) = if let Some(listener) = self.listeners.get(&source).expect("invalid element id").get(&TypeId::of::<Ev>()) {
+            *listener
         } else {
             return;
         };
-        for (listener, callback) in listeners {
-            let listener_ptr: *mut Element = self.elements.get_mut(&listener).expect("invalid element id").borrow_mut();
-            let listener_raw = unsafe { mem::transmute(listener_ptr as *mut ()) };
-            let ctx = Context::new(self, listener);
-            let callback: fn(&mut (), Context<()>, Ev) = unsafe { mem::transmute(callback) };
-            callback(listener_raw, ctx, event.clone());
-        }
+        let listener_ptr: *mut Element = self.elements.get_mut(&listener).expect("invalid element id").borrow_mut();
+        let listener_raw = unsafe { mem::transmute(listener_ptr as *mut ()) };
+        let ctx = Context::new(self, listener);
+        let callback: fn(&mut (), Context<()>, Ev) = unsafe { mem::transmute(callback) };
+        callback(listener_raw, ctx, event);
     }
 
     fn listen<E, Ev: 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: fn(&mut E, Context<E>, Ev)) {
-        self.listeners.get_mut(&source).expect("invalid element id")
-            .entry(TypeId::of::<Ev>()).or_insert_with(|| HashMap::new())
-            .insert(listener, unsafe { mem::transmute(callback) });
-        self.listening.entry(listener).or_insert_with(|| HashMap::new())
-            .entry(source).or_insert_with(|| HashSet::new())
-            .insert(TypeId::of::<Ev>());
+        self.listeners.get_mut(&source).expect("invalid element id").insert(TypeId::of::<Ev>(), (listener, unsafe { mem::transmute(callback) }));
     }
 
     pub fn set_modifiers(&mut self, modifiers: KeyboardModifiers) {
