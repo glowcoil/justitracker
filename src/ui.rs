@@ -276,7 +276,9 @@ impl UI {
     /* styles */
 
     pub fn set_global_style<P: Patch>(&mut self, style: P::PatchType) {
-        self.global_styles.insert::<P::PatchType>(style);
+        self.global_styles.entry::<P::PatchType>()
+            .or_insert_with(|| P::PatchType::default())
+            .merge(&style);
     }
 
     pub fn unset_global_style<P: Patch>(&mut self) {
@@ -286,7 +288,9 @@ impl UI {
     pub fn set_global_element_style<W: Element + 'static, P: Patch>(&mut self, style: P::PatchType) {
         self.global_element_styles.entry(TypeId::of::<W>())
             .or_insert_with(|| AnyMap::new())
-            .insert::<P::PatchType>(style);
+            .entry::<P::PatchType>()
+            .or_insert_with(|| P::PatchType::default())
+            .merge(&style);
     }
 
     pub fn unset_global_element_style<W: Element + 'static, P: Patch>(&mut self) {
@@ -296,7 +300,9 @@ impl UI {
     }
 
     pub fn set_class_style<P: Patch>(&mut self, class: ClassRef, style: P::PatchType) {
-        self.class_styles.get_mut(&class).expect("invalid class id").insert::<P::PatchType>(style);
+        self.class_styles.get_mut(&class).expect("invalid class id").entry::<P::PatchType>()
+            .or_insert_with(|| P::PatchType::default())
+            .merge(&style);
     }
 
     pub fn unset_class_style<P: Patch>(&mut self, class: ClassRef) {
@@ -304,7 +310,9 @@ impl UI {
     }
 
     pub fn set_element_style<P: Patch>(&mut self, element: usize, style: P::PatchType) {
-        self.element_styles.get_mut(&element).expect("invalid element id").insert::<P::PatchType>(style);
+        self.element_styles.get_mut(&element).expect("invalid element id").entry::<P::PatchType>()
+            .or_insert_with(|| P::PatchType::default())
+            .merge(&style);
     }
 
     pub fn unset_element_style<P: Patch>(&mut self, element: usize) {
@@ -840,13 +848,27 @@ macro_rules! style {
                 )*
             } 
         }
+
+        impl Merge for $patch {
+            fn merge(&mut self, other: &$patch) {
+                $(
+                    if other.$field.is_some() {
+                        self.$field = other.$field.clone();
+                    }
+                )*
+            }
+        }
     }
 }
 
 
 pub trait Patch {
-    type PatchType: 'static;
+    type PatchType: Default + Merge + 'static;
     fn patch(&mut self, patch: &Self::PatchType);
+}
+
+pub trait Merge {
+    fn merge(&mut self, other: &Self);
 }
 
 
