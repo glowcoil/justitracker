@@ -137,7 +137,7 @@ impl UI {
 
     /* element tree */
 
-    pub fn place_root<'a, E, I>(&'a mut self, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+    pub fn place_root<'a, E, I>(&'a mut self, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         let root = self.root;
 
         self.remove_element(root);
@@ -159,7 +159,7 @@ impl UI {
         self.slots.insert(element, slot);
     }
 
-    fn add_child<E, I>(&mut self, parent: ElementRef, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+    fn add_child<E, I>(&mut self, parent: ElementRef, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         let child_id = self.get_next_id();
         self.hookup_element(child_id);
         self.setup_element_styles(child_id);
@@ -173,7 +173,7 @@ impl UI {
         child_id
     }
 
-    fn insert_child<E, I>(&mut self, parent: ElementRef, index: usize, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+    fn insert_child<E, I>(&mut self, parent: ElementRef, index: usize, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         let child_id = self.get_next_id();
         self.hookup_element(child_id);
         self.setup_element_styles(child_id);
@@ -340,7 +340,7 @@ impl UI {
 
     /* event handling */
 
-    pub fn send<M: 'static>(&mut self, receiver: ElementRef, message: &M) {
+    pub fn send<M: 'static>(&mut self, receiver: ElementRef, message: M) {
         let callback = if let Some(callback) = self.receivers.get(&receiver).expect("invalid element id").get(&TypeId::of::<M>()) {
             *callback
         } else {
@@ -349,15 +349,15 @@ impl UI {
         let receiver_ptr: *mut Element = self.elements.get_mut(&receiver).expect("invalid element id").borrow_mut();
         let receiver_raw = unsafe { mem::transmute(receiver_ptr as *mut ()) };
         let ctx = Context::new(self, receiver);
-        let message_raw = unsafe { mem::transmute(message) };
-        callback(receiver_raw, ctx, message_raw);
+        let callback: fn(&mut (), Context<()>, M) = unsafe { mem::transmute(callback) };
+        callback(receiver_raw, ctx, message);
     }
 
-    fn receive<E, M: 'static>(&mut self, receiver: ElementRef, callback: fn(&mut E, Context<E>, &M)) {
+    fn receive<E, M: 'static>(&mut self, receiver: ElementRef, callback: fn(&mut E, Context<E>, M)) {
         self.receivers.get_mut(&receiver).expect("invalid element id").insert(TypeId::of::<M>(), unsafe { mem::transmute(callback) });
     }
 
-    fn fire<Ev: 'static>(&mut self, source: ElementRef, event: &Ev) {
+    fn fire<Ev: Clone + 'static>(&mut self, source: ElementRef, event: Ev) {
         let listeners = if let Some(listeners) = self.listeners.get(&source).expect("invalid element id").get(&TypeId::of::<Ev>()) {
             listeners.clone()
         } else {
@@ -367,12 +367,12 @@ impl UI {
             let listener_ptr: *mut Element = self.elements.get_mut(&listener).expect("invalid element id").borrow_mut();
             let listener_raw = unsafe { mem::transmute(listener_ptr as *mut ()) };
             let ctx = Context::new(self, listener);
-            let event_raw = unsafe { mem::transmute(event) };
-            callback(listener_raw, ctx, event_raw);
+            let callback: fn(&mut (), Context<()>, Ev) = unsafe { mem::transmute(callback) };
+            callback(listener_raw, ctx, event.clone());
         }
     }
 
-    fn listen<E, Ev: 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: fn(&mut E, Context<E>, &Ev)) {
+    fn listen<E, Ev: 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: fn(&mut E, Context<E>, Ev)) {
         self.listeners.get_mut(&source).expect("invalid element id")
             .entry(TypeId::of::<Ev>()).or_insert_with(|| HashMap::new())
             .insert(listener, unsafe { mem::transmute(callback) });
@@ -447,7 +447,7 @@ impl UI {
             while self.parents.contains_key(&handler) && !self.receivers.get(&handler).expect("invalid element id").contains_key(&TypeId::of::<InputEvent>()) {
                 handler = *self.parents.get(&handler).expect("invalid element id");
             }
-            self.send(handler, &ev);
+            self.send(handler, ev);
         }
 
         // if response.capture_keyboard {
@@ -598,19 +598,19 @@ impl<'a, E: 'static> Context<'a, E> {
         self.ui.register_slot(self.element, element);
     }
 
-    pub fn send<M: 'static>(&mut self, element: ElementRef, message: &M) {
+    pub fn send<M: 'static>(&mut self, element: ElementRef, message: M) {
         self.ui.send::<M>(element, message);
     }
 
-    pub fn receive<M: 'static>(&mut self, callback: fn(&mut E, Context<E>, &M)) {
+    pub fn receive<M: 'static>(&mut self, callback: fn(&mut E, Context<E>, M)) {
         self.ui.receive::<E, M>(self.element, callback);
     }
 
-    pub fn fire<Ev: 'static>(&mut self, event: &Ev) {
+    pub fn fire<Ev: Clone + 'static>(&mut self, event: Ev) {
         self.ui.fire::<Ev>(self.element, event);
     }
 
-    pub fn listen<Ev: 'static>(&mut self, element: ElementRef, callback: fn(&mut E, Context<E>, &Ev)) {
+    pub fn listen<Ev: 'static>(&mut self, element: ElementRef, callback: fn(&mut E, Context<E>, Ev)) {
         self.ui.listen::<E, Ev>(self.element, element, callback);
     }
 
@@ -640,11 +640,11 @@ impl<'a> Slot<'a> {
         }
     }
 
-    pub fn add_child<E, I>(&mut self, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+    pub fn add_child<E, I>(&mut self, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         self.ui.add_child(self.element, install)
     }
 
-    pub fn insert_child<E, I>(&mut self, index: usize, install: I) -> ElementRef where E: Element + 'static, I: Fn(Context<E>) -> E {
+    pub fn insert_child<E, I>(&mut self, index: usize, install: I) -> ElementRef where E: Element + 'static, I: FnOnce(Context<E>) -> E {
         self.ui.insert_child(self.element, index, install)
     }
 
@@ -1183,8 +1183,8 @@ impl Button {
         Button
     }
 
-    fn handle(&mut self, mut ctx: Context<Button>, evt: &InputEvent) {
-        if let InputEvent::MouseRelease { button: MouseButton::Left } = *evt {
+    fn handle(&mut self, mut ctx: Context<Button>, evt: InputEvent) {
+        if let InputEvent::MouseRelease { button: MouseButton::Left } = evt {
             ctx.fire(&ClickEvent);
         }
     }
