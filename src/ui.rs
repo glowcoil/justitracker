@@ -431,10 +431,10 @@ impl UI {
 
         if let Some(handler) = handler {
             let mut handler = handler;
-            while self.parents.contains_key(&handler) && !self.receivers.get(&handler).expect("invalid element id").contains::<Box<Fn(&mut UI, InputEvent)>>() {
+            while self.parents.contains_key(&handler) && !self.listeners.get(&handler).expect("invalid element id").contains::<Box<Fn(&mut UI, InputEvent)>>() {
                 handler = *self.parents.get(&handler).expect("invalid element id");
             }
-            self.send(handler, ev);
+            self.fire(handler, ev);
         }
 
         // if response.capture_keyboard {
@@ -1090,11 +1090,11 @@ impl Label {
                 label
             };
 
-            ctx.receive(|myself: &mut Label, ctx, s: String| {
+            let id = ctx.get_self();
+            ctx.listen(id, |myself: &mut Label, ctx, s: String| {
                 myself.text = s.into();
             });
-
-            ctx.receive(|myself: &mut Label, ctx, s: &'static str| {
+            ctx.listen(id, |myself: &mut Label, ctx, s: &'static str| {
                 myself.text = s.into();
             });
 
@@ -1178,7 +1178,7 @@ impl Button {
         let id = ctx.get_self();
         ctx.register_slot(id);
 
-        ctx.receive(Button::handle);
+        ctx.listen(id, Button::handle);
 
         Button
     }

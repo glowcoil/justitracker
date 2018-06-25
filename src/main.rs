@@ -270,7 +270,8 @@ impl Grid {
 
         ctx.set_element_style::<BoxStyle>(note_grid[cursor.0][cursor.1], BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
 
-        ctx.receive(Grid::handle);
+        let id = ctx.get_self();
+        ctx.listen(id, Grid::handle);
 
         Grid {
             song: Default::default(),
@@ -406,13 +407,14 @@ impl IntegerInput {
         move |mut ctx| {
             ctx.subtree().add_child(Label::with_text(IntegerInput::format(value)));
 
+            let id = ctx.get_self();
+            ctx.listen(id, IntegerInput::handle);
+
             ctx.receive(|myself: &mut IntegerInput, mut ctx: Context<IntegerInput>, value: Option<i32>| {
                 myself.value = value;
                 let label = ctx.subtree().get_child(0).unwrap();
                 ctx.send(label, IntegerInput::format(value));
             });
-
-            ctx.receive(IntegerInput::handle);
 
             IntegerInput {
                 value: value,
