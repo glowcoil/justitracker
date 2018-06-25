@@ -242,7 +242,17 @@ impl Grid {
             for j in 0..song.notes[0].len() {
                 let note = ctx.get_slot(note_column).add_child(Stack::install);
                 for k in 0..4 {
-                    let factor = ctx.get_slot(note).add_child(Label::with_text(".."));
+                    let factor = ctx.get_slot(note).add_child(IntegerInput::with_value(None));
+                    ctx.listen(factor, move |myself: &mut Grid, ctx, evt: i32| {
+                        if myself.song.notes[i][j].is_none() {
+                            myself.song.notes[i][j] = Some(vec![0; 4]);
+                        }
+                        if let Some(ref mut factors) = myself.song.notes[i][j] {
+                            println!("{}", evt);
+                            factors[k] = evt;
+                        }
+                        myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+                    });
                 }
                 ctx.set_element_style::<StackStyle>(note, StackStyle::spacing(5.0));
                 ctx.set_element_style::<BoxStyle>(note, BoxStyle::padding(2.0));
@@ -310,7 +320,7 @@ impl Grid {
                                     note[0] += 1;
                                 }
                                 let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(0).unwrap();
-                                ctx.send::<String>(factor, format!("{:02}", note[0]));
+                                ctx.send::<Option<i32>>(factor, Some(note[0]));
                             }
                             None => {}
                         }
@@ -328,7 +338,7 @@ impl Grid {
                                     note[1] += 1;
                                 }
                                 let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(1).unwrap();
-                                ctx.send::<String>(factor, format!("{:02}", note[1]));
+                                ctx.send::<Option<i32>>(factor, Some(note[1]));
                             }
                             None => {}
                         }
@@ -346,7 +356,7 @@ impl Grid {
                                     note[2] += 1;
                                 }
                                 let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(2).unwrap();
-                                ctx.send::<String>(factor, format!("{:02}", note[2]));
+                                ctx.send::<Option<i32>>(factor, Some(note[2]));
                             }
                             None => {}
                         }
@@ -364,7 +374,7 @@ impl Grid {
                                     note[3] += 1;
                                 }
                                 let factor = ctx.get_slot(self.note_grid[self.cursor.0][self.cursor.1]).get_child(3).unwrap();
-                                ctx.send::<String>(factor, format!("{:02}", note[3]));
+                                ctx.send::<Option<i32>>(factor, Some(note[3]));
                             }
                             None => {}
                         }
@@ -379,3 +389,61 @@ impl Grid {
 }
 
 impl Element for Grid {}
+
+
+struct IntegerInput {
+    value: Option<i32>,
+    old_value: Option<i32>,
+}
+
+impl IntegerInput {
+    fn with_value(value: Option<i32>) -> impl FnOnce(Context<IntegerInput>) -> IntegerInput {
+        move |mut ctx| {
+            ctx.subtree().add_child(Label::with_text(IntegerInput::format(value)));
+
+            ctx.receive(|myself: &mut IntegerInput, mut ctx: Context<IntegerInput>, value: Option<i32>| {
+                myself.value = value;
+                let label = ctx.subtree().get_child(0).unwrap();
+                ctx.send(label, IntegerInput::format(value));
+            });
+
+            ctx.receive(IntegerInput::handle);
+
+            IntegerInput {
+                value: value,
+                old_value: None,
+            }
+        }
+    }
+
+    fn format(value: Option<i32>) -> String {
+        value.map(|v| format!("{:02}", v)).unwrap_or("..".to_string())
+    }
+
+    fn handle(&mut self, mut ctx: Context<IntegerInput>, evt: InputEvent) {
+        match evt {
+            InputEvent::CursorMoved { position } => {
+                if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {
+                    if self.value.is_none() {
+                        self.value = Some(0);
+                    }
+                    if self.old_value.is_none() {
+                        self.old_value = self.value;
+                    }
+                    let dy = -(ctx.get_input_state().mouse_position.y - mouse_drag_origin.y);
+                    self.value = self.old_value.map(|v| v + (dy / 8.0) as i32);
+
+                    let label = ctx.subtree().get_child(0).unwrap();
+                    ctx.send(label, IntegerInput::format(self.value));
+                    ctx.fire::<i32>(self.value.unwrap());
+                }
+            }
+            InputEvent::MouseRelease { button: MouseButton::Left } => {
+                self.old_value = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Element for IntegerInput {}
