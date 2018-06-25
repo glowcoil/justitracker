@@ -36,6 +36,7 @@ enum Message {
 
 #[derive(Clone)]
 pub struct Song {
+    bpm: u32,
     samples: Vec<Vec<f32>>,
     notes: Vec<Vec<Option<Vec<i32>>>>,
 }
@@ -43,6 +44,7 @@ pub struct Song {
 impl Default for Song {
     fn default() -> Song {
         Song {
+            bpm: 120,
             samples: vec![vec![0.0; 1]; 8],
             notes: vec![vec![None; 8]; 8],
         }
@@ -204,8 +206,12 @@ impl Grid {
 
         let bpm_label = ctx.get_slot(controls_row).add_child(Label::with_text("bpm:"));
         ctx.set_element_style::<BoxStyle>(bpm_label, BoxStyle::v_align(Align::Center));
-        let bpm_label = ctx.get_slot(controls_row).add_child(Label::with_text("120"));
-        ctx.set_element_style::<BoxStyle>(bpm_label, BoxStyle::v_align(Align::Center));
+        let bpm = ctx.get_slot(controls_row).add_child(IntegerInput::with_value(Some(120)));
+        ctx.listen(bpm, |myself: &mut Grid, ctx, value: i32| {
+            myself.song.bpm = value as u32;
+            myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+        });
+        // ctx.set_element_style::<BoxStyle>(bpm, BoxStyle::v_align(Align::Center));
 
         let song: Song = Default::default();
         let mut note_grid = Vec::with_capacity(song.notes.len());
@@ -248,7 +254,6 @@ impl Grid {
                             myself.song.notes[i][j] = Some(vec![0; 4]);
                         }
                         if let Some(ref mut factors) = myself.song.notes[i][j] {
-                            println!("{}", evt);
                             factors[k] = evt;
                         }
                         myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();

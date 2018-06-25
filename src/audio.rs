@@ -30,7 +30,6 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
 
         let mut playing = false;
 
-        let bpm: f32 = 120.0;
         let mut t: u32 = 0;
         let mut note: usize = 0;
 
@@ -75,7 +74,7 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                             t += 1;
                             let mut mix: f32 = 0.0;
                             for track in 0..song.notes.len() {
-                                let note_length = 60.0 / bpm;
+                                let note_length = 60.0 / song.bpm as f32;
                                 if t as f32 / format.samples_rate.0 as f32 > note_length {
                                     t = 0;
                                     note = (note + 1) % 8;
