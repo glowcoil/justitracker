@@ -413,8 +413,9 @@ impl UI {
                 // if let Some(dragging) = self.dragging {
                 //     Some(dragging)
                 // } else {
-                    if self.layout[&self.root].contains_point(self.input_state.mouse_position) {
-                        Some(self.find_element(self.root, /*self.input_state.mouse_drag_origin.unwrap_or(*/self.input_state.mouse_position))
+                    let position = self.input_state.mouse_drag_origin.unwrap_or(self.input_state.mouse_position);
+                    if self.layout[&self.root].contains_point(position) {
+                        Some(self.find_element(self.root, position))
                     } else {
                         None
                     }
