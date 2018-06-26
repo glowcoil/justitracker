@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use anymap::AnyMap;
+use unsafe_any::UnsafeAnyExt;
+
 use std::any::{Any, TypeId};
 use std::marker::PhantomData;
 use std::mem;
 use std::borrow::BorrowMut;
 use std::borrow::Cow;
-
+use std::collections::VecDeque;
 use std::f32;
 
 use glium::glutin;
@@ -69,6 +71,8 @@ pub struct UI {
     receivers: HashMap<ElementRef, AnyMap>,
     listeners: HashMap<ElementRef, AnyMap>,
 
+    queue: VecDeque<(Box<Any>, Box<Fn(&mut UI, Box<Any>)>)>,
+
     global_styles: AnyMap,
     global_element_styles: HashMap<TypeId, AnyMap>,
     class_styles: HashMap<ClassRef, AnyMap>,
@@ -102,6 +106,8 @@ impl UI {
 
             receivers: HashMap::new(),
             listeners: HashMap::new(),
+
+            queue: VecDeque::new(),
 
             global_styles: AnyMap::new(),
             global_element_styles: HashMap::new(),
@@ -173,7 +179,6 @@ impl UI {
 
         let element = install(Context::new(self, child_id));
         self.elements.insert(child_id, Box::new(element));
-
 
         child_id
     }
@@ -338,10 +343,12 @@ impl UI {
     /* event handling */
 
     pub fn send<M: 'static>(&mut self, receiver: ElementRef, message: M) {
-        if let Some(callback) = self.receivers.get_mut(&receiver).expect("invalid element id").remove::<Box<Fn(&mut UI, M)>>() {
-            callback(self, message);
-            self.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(&mut UI, M)>>(callback);
-        }
+        self.queue.push_back((Box::new(message), Box::new(move |ui: &mut UI, message: Box<Any>| {
+            if let Some(callback) = ui.receivers.get_mut(&receiver).expect("invalid element id").remove::<Box<Fn(&mut UI, M)>>() {
+                callback(ui, *unsafe { message.downcast_unchecked::<M>() });
+                ui.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(&mut UI, M)>>(callback);
+            }
+        })));
     }
 
     fn receive<E: Element + 'static, M: 'static, F: Fn(&mut E, Context<E>, M) + 'static>(&mut self, receiver: ElementRef, callback: F) {
@@ -365,6 +372,12 @@ impl UI {
             callback(unsafe { element.downcast_mut_unchecked::<E>() }, Context::new(ui, listener), event);
             ui.elements.insert(listener, element);
         }));
+    }
+
+    fn drain_queue(&mut self) {
+        while let Some((message, thunk)) = self.queue.pop_front() {
+            thunk(self, message);
+        }
     }
 
     pub fn set_modifiers(&mut self, modifiers: KeyboardModifiers) {
@@ -435,6 +448,7 @@ impl UI {
                 handler = *self.parents.get(&handler).expect("invalid element id");
             }
             self.fire(handler, ev);
+            self.drain_queue();
         }
 
         // if response.capture_keyboard {
@@ -1090,11 +1104,10 @@ impl Label {
                 label
             };
 
-            let id = ctx.get_self();
-            ctx.listen(id, |myself: &mut Label, ctx, s: String| {
+            ctx.receive(|myself: &mut Label, ctx, s: String| {
                 myself.text = s.into();
             });
-            ctx.listen(id, |myself: &mut Label, ctx, s: &'static str| {
+            ctx.receive(|myself: &mut Label, ctx, s: &'static str| {
                 myself.text = s.into();
             });
 

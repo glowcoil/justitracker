@@ -12,6 +12,7 @@ extern crate hound;
 extern crate libc;
 extern crate nfd;
 extern crate anymap;
+extern crate unsafe_any;
 
 use glium::glutin;
 
