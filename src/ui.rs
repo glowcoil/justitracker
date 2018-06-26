@@ -40,7 +40,10 @@ pub trait Element {
         let box_style = resources.get_style::<BoxStyle>();
         BoxStyle::arrange(&box_style, bounds, children)
     }
-    fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {}
+    fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
+        let box_style = resources.get_style::<BoxStyle>();
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: box_style.color });
+    }
 
     fn type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
 }
