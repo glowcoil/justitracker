@@ -208,8 +208,9 @@ impl Grid {
         let bpm_label = ctx.get_slot(controls_row).add_child(Label::with_text("bpm:"));
         ctx.set_element_style::<BoxStyle>(bpm_label, BoxStyle::v_align(Align::Center));
         let bpm = ctx.get_slot(controls_row).add_child(IntegerInput::with_value(Some(120)));
-        ctx.listen(bpm, |myself: &mut Grid, ctx, value: i32| {
+        ctx.listen(bpm, move |myself: &mut Grid, mut ctx, value: i32| {
             myself.song.bpm = value as u32;
+            ctx.send(bpm, Some(value));
             myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
         });
         // ctx.set_element_style::<BoxStyle>(bpm, BoxStyle::v_align(Align::Center));
@@ -250,12 +251,13 @@ impl Grid {
                 let note = ctx.get_slot(note_column).add_child(Stack::install);
                 for k in 0..4 {
                     let factor = ctx.get_slot(note).add_child(IntegerInput::with_value(None));
-                    ctx.listen(factor, move |myself: &mut Grid, ctx, evt: i32| {
+                    ctx.listen(factor, move |myself: &mut Grid, mut ctx, evt: i32| {
                         if myself.song.notes[i][j].is_none() {
                             myself.song.notes[i][j] = Some(vec![0; 4]);
                         }
                         if let Some(ref mut factors) = myself.song.notes[i][j] {
                             factors[k] = evt;
+                            ctx.send::<Option<i32>>(factor, Some(evt));
                         }
                         myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
                     });
@@ -414,7 +416,7 @@ impl IntegerInput {
             ctx.receive(|myself: &mut IntegerInput, mut ctx: Context<IntegerInput>, value: Option<i32>| {
                 myself.value = value;
                 let label = ctx.subtree().get_child(0).unwrap();
-                ctx.send(label, IntegerInput::format(value));
+                ctx.send::<String>(label, IntegerInput::format(value));
             });
 
             IntegerInput {
@@ -432,18 +434,11 @@ impl IntegerInput {
         match evt {
             InputEvent::CursorMoved { position } => {
                 if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {
-                    if self.value.is_none() {
-                        self.value = Some(0);
-                    }
                     if self.old_value.is_none() {
-                        self.old_value = self.value;
+                        self.old_value = Some(self.value.unwrap_or(0));
                     }
                     let dy = -(ctx.get_input_state().mouse_position.y - mouse_drag_origin.y);
-                    self.value = self.old_value.map(|v| v + (dy / 8.0) as i32);
-
-                    let label = ctx.subtree().get_child(0).unwrap();
-                    ctx.send(label, IntegerInput::format(self.value));
-                    ctx.fire::<i32>(self.value.unwrap());
+                    ctx.fire::<i32>(self.old_value.unwrap() + (dy / 8.0) as i32);
                 }
             }
             InputEvent::MouseRelease { button: MouseButton::Left } => {
