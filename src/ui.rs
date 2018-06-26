@@ -1203,11 +1203,12 @@ impl Button {
 
     fn handle(&mut self, mut ctx: Context<Button>, evt: InputEvent) {
         if let InputEvent::MouseRelease { button: MouseButton::Left } = evt {
-            ctx.fire(&ClickEvent);
+            ctx.fire(ClickEvent);
         }
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct ClickEvent;
 
 impl Element for Button {

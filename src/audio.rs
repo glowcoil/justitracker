@@ -6,7 +6,7 @@ use std::f32::consts;
 use cpal;
 use cpal::{EventLoop, UnknownTypeBuffer};
 
-use Song;
+use {Song, Note};
 
 pub enum AudioMessage {
     Play,
@@ -69,20 +69,27 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                     }
                 },
                 UnknownTypeBuffer::F32(mut buffer) => {
+                    let note_length = ((60.0 / song.bpm as f32) * format.samples_rate.0 as f32) as u32;
                     for elem in buffer.iter_mut() {
                         if playing {
                             t += 1;
                             let mut mix: f32 = 0.0;
                             for track in 0..song.notes.len() {
-                                let note_length = 60.0 / song.bpm as f32;
-                                if t as f32 / format.samples_rate.0 as f32 > note_length {
+                                if t == note_length {
                                     t = 0;
-                                    note = (note + 1) % 8;
+                                    note = (note + 1) % song.ptn_length;
                                 }
 
-                                if let Some(ref factors) = song.notes[track][note] {
+                                let mut previous = note;
+                                let mut length = 0;
+                                while let Note::None = song.notes[track][previous] {
+                                    previous = previous.saturating_sub(1);
+                                    length += 1;
+                                    if previous == 0 { break; }
+                                }
+                                if let Note::On(ref factors) = song.notes[track][previous] {
                                     let pitch = 2.0f32.powi(factors[0]) * 3.0f32.powi(factors[1]) * 5.0f32.powi(factors[2]) * 7.0f32.powi(factors[3]);
-                                    let phase: f32 = (t as f32 * pitch) % song.samples[track].len() as f32;
+                                    let phase: f32 = ((length * note_length + t) as f32 * pitch) % song.samples[track].len() as f32;
 
                                     let phase_whole = phase as usize;
                                     let phase_frac = phase - phase_whole as f32;
