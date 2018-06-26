@@ -343,12 +343,10 @@ impl UI {
     /* event handling */
 
     pub fn send<M: 'static>(&mut self, receiver: ElementRef, message: M) {
-        self.queue.push_back((Box::new(message), Box::new(move |ui: &mut UI, message: Box<Any>| {
-            if let Some(callback) = ui.receivers.get_mut(&receiver).expect("invalid element id").remove::<Box<Fn(&mut UI, M)>>() {
-                callback(ui, *unsafe { message.downcast_unchecked::<M>() });
-                ui.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(&mut UI, M)>>(callback);
-            }
-        })));
+        if let Some(callback) = self.receivers.get_mut(&receiver).expect("invalid element id").remove::<Box<Fn(&mut UI, M)>>() {
+            callback(self, message);
+            self.receivers.get_mut(&receiver).expect("invalid element id").insert::<Box<Fn(&mut UI, M)>>(callback);
+        }
     }
 
     fn receive<E: Element + 'static, M: 'static, F: Fn(&mut E, Context<E>, M) + 'static>(&mut self, receiver: ElementRef, callback: F) {
@@ -360,10 +358,12 @@ impl UI {
     }
 
     fn fire<Ev: 'static>(&mut self, source: ElementRef, event: Ev) {
-        if let Some(callback) = self.listeners.get_mut(&source).expect("invalid element id").remove::<Box<Fn(&mut UI, Ev)>>() {
-            callback(self, event);
-            self.listeners.get_mut(&source).expect("invalid element id").insert::<Box<Fn(&mut UI, Ev)>>(callback);
-        }
+        self.queue.push_back((Box::new(event), Box::new(move |ui: &mut UI, event: Box<Any>| {
+            if let Some(callback) = ui.listeners.get_mut(&source).expect("invalid element id").remove::<Box<Fn(&mut UI, Ev)>>() {
+                callback(ui, *unsafe { event.downcast_unchecked::<Ev>() });
+                ui.listeners.get_mut(&source).expect("invalid element id").insert::<Box<Fn(&mut UI, Ev)>>(callback);
+            }
+        })));
     }
 
     fn listen<E: Element + 'static, Ev: 'static, F: Fn(&mut E, Context<E>, Ev) + 'static>(&mut self, listener: ElementRef, source: ElementRef, callback: F) {
@@ -375,8 +375,8 @@ impl UI {
     }
 
     fn drain_queue(&mut self) {
-        while let Some((message, thunk)) = self.queue.pop_front() {
-            thunk(self, message);
+        while let Some((event, thunk)) = self.queue.pop_front() {
+            thunk(self, event);
         }
     }
 
