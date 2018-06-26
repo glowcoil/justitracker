@@ -361,7 +361,9 @@ impl UI {
         self.queue.push_back((Box::new(event), Box::new(move |ui: &mut UI, event: Box<Any>| {
             if let Some(callback) = ui.listeners.get_mut(&source).expect("invalid element id").remove::<Box<Fn(&mut UI, Ev)>>() {
                 callback(ui, *unsafe { event.downcast_unchecked::<Ev>() });
-                ui.listeners.get_mut(&source).expect("invalid element id").insert::<Box<Fn(&mut UI, Ev)>>(callback);
+                if let Some(listeners) = ui.listeners.get_mut(&source) {
+                    listeners.insert::<Box<Fn(&mut UI, Ev)>>(callback);
+                }
             }
         })));
     }
