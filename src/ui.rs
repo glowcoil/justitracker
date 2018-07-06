@@ -18,8 +18,6 @@ use render::*;
 
 pub type ElementRef = usize;
 
-type ClassRef = usize;
-
 #[derive(Copy, Clone)]
 pub struct ResourceRef<R> {
     index: Option<usize>,
@@ -67,9 +65,6 @@ pub struct UI {
     children: HashMap<ElementRef, Vec<ElementRef>>,
     slots: HashMap<ElementRef, ElementRef>,
     layout: HashMap<ElementRef, BoundingBox>,
-    next_class_id: usize,
-    classes: HashMap<ClassRef, HashSet<ElementRef>>,
-    element_classes: HashMap<ElementRef, Vec<ClassRef>>,
 
     receivers: HashMap<ElementRef, AnyMap>,
     listeners: HashMap<ElementRef, AnyMap>,
@@ -78,7 +73,6 @@ pub struct UI {
 
     global_styles: AnyMap,
     global_element_styles: HashMap<TypeId, AnyMap>,
-    class_styles: HashMap<ClassRef, AnyMap>,
     element_styles: HashMap<ElementRef, AnyMap>,
 
     next_resource_id: usize,
@@ -103,9 +97,6 @@ impl UI {
             children: HashMap::new(),
             slots: HashMap::new(),
             layout: HashMap::new(),
-            next_class_id: 0,
-            classes: HashMap::new(),
-            element_classes: HashMap::new(),
 
             receivers: HashMap::new(),
             listeners: HashMap::new(),
@@ -114,7 +105,6 @@ impl UI {
 
             global_styles: AnyMap::new(),
             global_element_styles: HashMap::new(),
-            class_styles: HashMap::new(),
             element_styles: HashMap::new(),
 
             next_resource_id: 0,
@@ -227,7 +217,6 @@ impl UI {
     }
 
     fn setup_element_styles(&mut self, element: usize) {
-        self.element_classes.insert(element, Vec::new());
         self.element_styles.insert(element, AnyMap::new());
     }
 
@@ -243,39 +232,7 @@ impl UI {
     }
 
     fn remove_element_styles(&mut self, element: usize) {
-        for class in self.element_classes.get(&element).expect("invalid element id") {
-            self.classes.get_mut(class).expect("invalid class id").remove(&element);
-        }
-        self.element_classes.remove(&element);
         self.element_styles.remove(&element);
-    }
-
-    /* classes */
-
-    pub fn new_class(&mut self) -> ClassRef {
-        let class_id = self.next_class_id;
-        self.classes.insert(class_id, HashSet::new());
-        self.class_styles.insert(class_id, AnyMap::new());
-        self.next_class_id += 1;
-        class_id
-    }
-
-    pub fn delete_class(&mut self, class: ClassRef) {
-        for element in self.classes.get(&class).expect("invalid class id") {
-            self.element_classes.get_mut(&element).expect("invalid element id").retain(|c| *c != class);
-        }
-        self.classes.remove(&class);
-        self.class_styles.remove(&class);
-    }
-
-    pub fn add_class(&mut self, element: usize, class: ClassRef) {
-        self.classes.get_mut(&class).expect("invalid class id").insert(element);
-        self.element_classes.get_mut(&element).expect("invalid element id").push(class);
-    }
-
-    pub fn remove_class(&mut self, element: usize, class: ClassRef) {
-        self.classes.get_mut(&class).expect("invalid class id").remove(&element);
-        self.element_classes.get_mut(&element).expect("invalid element id").retain(|c| *c != class);
     }
 
     /* styles */
@@ -302,16 +259,6 @@ impl UI {
         if let Some(map) = self.global_element_styles.get_mut(&TypeId::of::<W>()) {
             map.remove::<P::PatchType>();
         }
-    }
-
-    pub fn set_class_style<P: Patch>(&mut self, class: ClassRef, style: P::PatchType) {
-        self.class_styles.get_mut(&class).expect("invalid class id").entry::<P::PatchType>()
-            .or_insert_with(|| P::PatchType::default())
-            .merge(&style);
-    }
-
-    pub fn unset_class_style<P: Patch>(&mut self, class: ClassRef) {
-        self.class_styles.get_mut(&class).expect("invalid class id").remove::<P::PatchType>();
     }
 
     pub fn set_element_style<P: Patch>(&mut self, element: usize, style: P::PatchType) {
@@ -553,11 +500,9 @@ impl UI {
             let resources = Resources {
                 element: element,
                 element_type_id: self.elements[&element].type_id(),
-                element_classes: &self.element_classes[&element],
 
                 global_styles: &self.global_styles,
                 global_element_styles: &self.global_element_styles,
-                class_styles: &self.class_styles,
                 element_styles: &self.element_styles,
 
                 resources: &self.resources,
@@ -756,11 +701,9 @@ impl Default for EventResponse {
 pub struct Resources<'a> {
     element: usize,
     element_type_id: TypeId,
-    element_classes: &'a Vec<ClassRef>,
 
     global_styles: &'a AnyMap,
     global_element_styles: &'a HashMap<TypeId, AnyMap>,
-    class_styles: &'a HashMap<ClassRef, AnyMap>,
     element_styles: &'a HashMap<usize, AnyMap>,
 
     resources: &'a AnyMap,
@@ -771,11 +714,9 @@ impl<'a> Resources<'a> {
         Resources {
             element: element,
             element_type_id: type_id,
-            element_classes: &ui.element_classes[&element],
 
             global_styles: &ui.global_styles,
             global_element_styles: &ui.global_element_styles,
-            class_styles: &ui.class_styles,
             element_styles: &ui.element_styles,
 
             resources: &ui.resources,
@@ -789,11 +730,6 @@ impl<'a> Resources<'a> {
         }
         if let Some(map) = self.global_element_styles.get(&self.element_type_id) {
             if let Some(patch) = map.get::<P::PatchType>() {
-                style.patch(patch);
-            }
-        }
-        for class in self.element_classes.iter() {
-            if let Some(patch) = self.class_styles[&class].get::<P::PatchType>() {
                 style.patch(patch);
             }
         }
