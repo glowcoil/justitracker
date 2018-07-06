@@ -16,8 +16,6 @@ extern crate unsafe_any;
 
 use glium::glutin;
 
-use rusttype::{FontCollection, Font};
-
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -78,16 +76,9 @@ fn main() {
 
     let mut renderer = Renderer::new(display, width, height, dpi_factor);
 
-    let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
-    let font = collection.into_font().unwrap();
-
     let mut ui = UI::new(width as f32, height as f32);
 
     // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
-    
-    let font_resource = ui.add_resource::<Font<'static>>(font);
-    ui.set_global_style::<TextStyle>(TextStyle::font(font_resource));
-
     // ui.set_global_style::<StackStyle>(StackStyle::grow(Grow::Equal).spacing(5.0));
 
     ui.set_global_element_style::<Button, BoxStyle>(BoxStyle::padding(5.0));

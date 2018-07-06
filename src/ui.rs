@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::f32;
 
 use glium::glutin;
-use rusttype::{Font, Scale, point, PositionedGlyph};
+use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
@@ -20,13 +20,12 @@ pub type ElementRef = usize;
 
 #[derive(Copy, Clone)]
 pub struct ResourceRef<R> {
-    index: Option<usize>,
+    index: usize,
     resource_type: PhantomData<R>,
 }
 
 impl<R: 'static> ResourceRef<R> {
-    fn new(index: usize) -> ResourceRef<R> { ResourceRef { index: Some(index), resource_type: PhantomData } }
-    fn null() -> ResourceRef<R> { ResourceRef { index: None, resource_type: PhantomData } }
+    fn new(index: usize) -> ResourceRef<R> { ResourceRef { index: index, resource_type: PhantomData } }
 }
 
 pub trait Element {
@@ -124,6 +123,11 @@ impl UI {
         ui.hookup_element(0);
         ui.setup_element_styles(0);
         ui.elements.insert(0, Box::new(Stack));
+
+        let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
+        let font = collection.into_font().unwrap();
+
+        let font_resource = ui.add_resource::<Font<'static>>(font);
 
         ui
     }
@@ -279,15 +283,15 @@ impl UI {
             .or_insert_with(|| HashMap::new())
             .insert(resource_id, resource);
         self.next_resource_id += 1;
-        ResourceRef { index: Some(resource_id), resource_type: PhantomData }
+        ResourceRef { index: resource_id, resource_type: PhantomData }
     }
 
     pub fn get_resource<R: 'static>(&mut self, resource_ref: ResourceRef<R>) -> &R {
-         &self.resources.get::<HashMap<usize, R>>().expect("invalid resource id")[&resource_ref.index.expect("invalid resource id")]
+         &self.resources.get::<HashMap<usize, R>>().expect("invalid resource id")[&resource_ref.index]
     }
 
     pub fn remove_resource<R: 'static>(&mut self, resource_ref: ResourceRef<R>) -> R {
-        self.resources.get_mut::<HashMap<usize, R>>().expect("invalid resource id").remove(&resource_ref.index.expect("invalid resource id")).expect("invalid resource id")
+        self.resources.get_mut::<HashMap<usize, R>>().expect("invalid resource id").remove(&resource_ref.index).expect("invalid resource id")
     }
 
     /* event handling */
@@ -740,7 +744,7 @@ impl<'a> Resources<'a> {
     }
 
     pub fn get_resource<R: 'static>(&self, resource_ref: ResourceRef<R>) -> &R {
-        &self.resources.get::<HashMap<usize, R>>().expect("invalid resource id")[&resource_ref.index.expect("invalid resource id")]
+        &self.resources.get::<HashMap<usize, R>>().expect("invalid resource id")[&resource_ref.index]
     }
 }
 
@@ -1014,7 +1018,7 @@ style! {
 impl Default for TextStyle {
     fn default() -> TextStyle {
         TextStyle {
-            font: ResourceRef::null(),
+            font: ResourceRef::new(0),
             scale: Scale::uniform(14.0),
         }
     }
