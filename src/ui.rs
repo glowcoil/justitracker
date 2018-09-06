@@ -84,30 +84,45 @@ impl<C> Component<C> {
 pub trait Element {
     type Model;
 
-    fn measure(&self, model: &Self::Model, children: &[BoundingBox]) -> BoundingBox {
-        let mut width = 0.0f32;
-        let mut height = 0.0f32;
-        for child_box in children {
-            width = width.max(child_box.size.x);
-            height = height.max(child_box.size.y);
+    fn layout(&self, model: &Self::Model, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in children {
+            let (child_width, child_height) = child.layout(max_width, max_height);
+            width = width.max(child_width);
+            height = height.max(child_height);
         }
-
-        BoundingBox { pos: Point::new(0.0, 0.0), size: Point::new(width, height) }
+        (max_width, max_height)
     }
-    fn arrange(&self, model: &Self::Model, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
-        for child_box in children.iter_mut() {
-            *child_box = bounds;
-        }
 
-        bounds
-    }
     fn display(&self, model: &Self::Model, bounds: BoundingBox, list: &mut DisplayList) {}
 }
 
 pub trait ElementDelegate {
-    fn measure(&self, ui: &UI, children: &[BoundingBox]) -> BoundingBox;
-    fn arrange(&self, ui: &UI, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox;
-    fn display(&self, ui: &UI, bounds: BoundingBox, list: &mut DisplayList);
+    fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32);
+    fn display(&self, components: &Slab<Box<UnsafeAny>>, bounds: BoundingBox, list: &mut DisplayList);
+}
+
+pub struct ChildDelegate<'a> {
+    index: usize,
+    element: &'a ElementDelegate,
+    components: &'a Slab<Box<UnsafeAny>>,
+    bounds: BoundingBox,
+    children: Vec<ChildDelegate<'a>>,
+}
+
+impl<'a> ChildDelegate<'a> {
+    pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
+        let (width, height) = self.element.layout(&self.components, max_width, max_height, &mut self.children);
+        self.bounds.size.x = width;
+        self.bounds.size.y = height;
+        (width, height)
+    }
+
+    pub fn offset(&mut self, x: f32, y: f32) {
+        self.bounds.pos.x = x;
+        self.bounds.pos.y = y;
+    }
 }
 
 pub struct BoundElement<E: Element> {
@@ -129,16 +144,12 @@ impl<E> From<BoundElement<E>> for Tree where E: 'static + Element {
 }
 
 impl<E> ElementDelegate for BoundElement<E> where E: Element {
-    fn measure(&self, ui: &UI, children: &[BoundingBox]) -> BoundingBox {
-        let value = self.model.get(ui);
-        self.element.measure(value, children)
+    fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let value = self.model.get(components);
+        self.element.layout(value, max_width, max_height, children)
     }
-    fn arrange(&self, ui: &UI, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
-        let value = self.model.get(ui);
-        self.element.arrange(value, bounds, children)
-    }
-    fn display(&self, ui: &UI, bounds: BoundingBox, list: &mut DisplayList) {
-        let value = self.model.get(ui);
+    fn display(&self, components: &Slab<Box<UnsafeAny>>, bounds: BoundingBox, list: &mut DisplayList) {
+        let value = self.model.get(components);
         self.element.display(value, bounds, list);
     }
 }
@@ -159,6 +170,10 @@ impl<E> BoundElement<E> where E: Element {
         }));
         self
     }
+
+    // fn children(&mut self, children: Vec<Tree>) -> Tree {
+        
+    // }
 }
 
 /* element with children */
@@ -195,7 +210,7 @@ pub struct Reference<A>(ReferenceType<A>);
 
 enum ReferenceType<A> {
     Value(A),
-    Getter(fn(&UI) -> &A),
+    Getter(fn(&Slab<Box<UnsafeAny>>) -> &A),
 }
 
 impl<A> Reference<A> {
@@ -203,7 +218,7 @@ impl<A> Reference<A> {
         Reference(ReferenceType::Value(value))
     }
 
-    fn get<'a>(&'a self, ui: &'a UI) -> &'a A {
+    fn get<'a>(&'a self, ui: &'a Slab<Box<UnsafeAny>>) -> &'a A {
         let Reference(ref inner) = *self;
         match inner {
             ReferenceType::Value(value) => &value,
@@ -277,6 +292,7 @@ impl UI {
     fn element<E: 'static + ElementDelegate>(&mut self, element: Box<E>) -> usize {
         let index = self.elements.insert(element);
         self.children.insert(Vec::new());
+        self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
         index
     }
 
@@ -418,7 +434,7 @@ impl UI {
     }
 
     fn display_element(&self, element: usize, list: &mut DisplayList) {
-        self.elements[element].display(self, self.layout[element], list);
+        self.elements[element].display(&self.components, self.layout[element], list);
         for child in self.children[element].iter() {
             self.display_element(*child, list);
         }
@@ -427,42 +443,33 @@ impl UI {
     /* layout */
 
     fn layout(&mut self) {
-        let (_bounding_box, mut tree) = self.measure(self.root);
-        let root = self.root;
-        let bounds = BoundingBox::new(0.0, 0.0, self.width, self.height);
-        self.arrange(root, bounds, &mut tree);
+        let mut root = Self::child_delegate(&self.components, &self.children, &self.elements, self.root);
+        let (width, height) = root.layout(self.width, self.height);
+        Self::commit_delegates(&mut self.layout, root);
     }
 
-    fn measure(&self, element: usize) -> (BoundingBox, BoundingBoxTree) {
-        let mut child_boxes = Vec::new();
-        let mut child_trees = Vec::new();
-        if let Some(children) = self.children.get(element) {
-            child_boxes.reserve(children.len());
-            child_trees.reserve(children.len());
-            for child in children {
-                let (child_box, child_tree) = self.measure(*child);
-                child_boxes.push(child_box);
-                child_trees.push(child_tree);
-            }
+    fn child_delegate<'a>(components: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<usize>>, elements: &'a Slab<Box<ElementDelegate>>, index: usize) -> ChildDelegate<'a> {
+        let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
+        let children_indices = &children[index];
+        child_delegates.reserve(children_indices.len());
+        for child in children_indices {
+            child_delegates.push(Self::child_delegate(components, children, elements, *child));
         }
-        let bounding_box = self.elements[element].measure(self, &child_boxes[..]);
-        (bounding_box, BoundingBoxTree { boxes: child_boxes, trees: child_trees })
-    }
-
-    fn arrange(&mut self, element: usize, bounds: BoundingBox, tree: &mut BoundingBoxTree) {
-        let bounding_box = self.elements[element].arrange(self, bounds, &mut tree.boxes[..]);
-        self.layout.insert(bounding_box);
-        if let Some(children) = self.children.get(element).map(|children| children.clone()) {
-            for (i, child) in children.iter().enumerate() {
-                self.arrange(*child, tree.boxes[i], &mut tree.trees[i]);
-            }
+        ChildDelegate {
+            index: index,
+            element: &*elements[index],
+            components: components,
+            bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
+            children: child_delegates,
         }
     }
-}
 
-struct BoundingBoxTree {
-    boxes: Vec<BoundingBox>,
-    trees: Vec<BoundingBoxTree>,
+    fn commit_delegates(layout: &mut Slab<BoundingBox>, delegate: ChildDelegate) {
+        layout[delegate.index] = delegate.bounds;
+        for child in delegate.children {
+            Self::commit_delegates(layout, child);
+        }
+    }
 }
 
 
@@ -471,8 +478,8 @@ pub struct Rectangle;
 impl Element for Rectangle {
     type Model = [f32; 4];
 
-    fn display(&self, model: &[f32; 4], bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *model });
+    fn display(&self, color: &[f32; 4], bounds: BoundingBox, list: &mut DisplayList) {
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *color });
     }
 }
 
@@ -495,32 +502,49 @@ impl Default for ContainerStyle {
     }
 }
 
-pub struct Container;
+// pub struct Container;
 
-impl Element for Container {
-    type Model = ContainerStyle;
+// impl Element for Container {
+//     type Model = ContainerStyle;
 
-    fn measure(model: &ContainerStyle, children: &[BoundingBox]) -> BoundingBox {
+//     fn measure(&self, model: &ContainerStyle, children: &[BoundingBox]) -> BoundingBox {
+//         let mut width: f32 = 0.0;
+//         let mut height: f32 = 0.0;
+
+//         for child_box in children {
+//             width = width.max(child_box.size.x);
+//             height = height.max(child_box.size.y);
+//         }
+
+//         width = width.max(model.min_width).min(model.max_width);
+//         height = height.max(model.min_height).min(model.max_height);
+
+//         BoundingBox::new(0.0, 0.0, width, height)
+//     }
+
+//     fn arrange(&self, model: &ContainerStyle, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
+//         for child_box in children.iter_mut() {
+//             *child_box = bounds;
+//         }
+
+//         bounds
+//     }
+// }
+
+
+pub struct Padding;
+
+impl Element for Padding {
+    type Model = f32;
+
+    fn layout(&self, padding: &f32, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
-
-        for child_box in children {
-            width = width.max(child_box.size.x);
-            height = height.max(child_box.size.y);
+        for child in children {
+            child.layout(max_width - 2.0 * padding, max_height - 2.0 * padding);
+            child.offset(*padding, *padding);
         }
-
-        width = width.max(model.min_width).min(model.max_width);
-        height = height.max(model.min_height).min(model.max_height);
-
-        BoundingBox::new(0.0, 0.0, width, height)
-    }
-
-    fn arrange(model: &ContainerStyle, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
-        for child_box in children.iter_mut() {
-            *child_box = bounds;
-        }
-
-        bounds
+        (width, height)
     }
 }
 
