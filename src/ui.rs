@@ -61,7 +61,7 @@ impl<C> ComponentRef<C> {
     }
 }
 
-pub fn component<C, F, T>(component: C, template: F) -> Component<C> where F: 'static + Fn(ComponentRef<C>) -> Tree {
+pub fn component<C, F>(component: C, template: F) -> Component<C> where F: 'static + Fn(ComponentRef<C>) -> Tree {
     Component {
         component: Box::new(component),
         template: Box::new(template),
@@ -71,8 +71,8 @@ pub fn component<C, F, T>(component: C, template: F) -> Component<C> where F: 's
 
 impl<C> Component<C> {
     fn on<D: 'static, E>(&mut self, listener: ComponentRef<D>, callback: impl Fn(&mut D, E) + 'static) -> &mut Component<C> {
-        self.listeners.insert(Box::new(move |ui: &mut UI, event: E| {
-            let listener = &mut ui.components[listener.index];
+        self.listeners.insert(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: E| {
+            let listener = &mut components[listener.index];
             callback(unsafe { listener.downcast_mut_unchecked() }, event);
         }));
         self
@@ -82,9 +82,7 @@ impl<C> Component<C> {
 /* element */
 
 pub trait Element {
-    type Model;
-
-    fn layout(&self, model: &Self::Model, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -95,12 +93,13 @@ pub trait Element {
         (max_width, max_height)
     }
 
-    fn display(&self, model: &Self::Model, bounds: BoundingBox, list: &mut DisplayList) {}
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {}
 }
 
 pub trait ElementDelegate {
     fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32);
     fn display(&self, components: &Slab<Box<UnsafeAny>>, bounds: BoundingBox, list: &mut DisplayList);
+    fn handle(&self, components: &mut Slab<Box<UnsafeAny>>, event: InputEvent) -> bool;
 }
 
 pub struct ChildDelegate<'a> {
@@ -126,9 +125,8 @@ impl<'a> ChildDelegate<'a> {
 }
 
 pub struct BoundElement<E: Element> {
-    element: E,
-    model: Reference<E::Model>,
-    listeners: Vec<Box<Fn(&mut UI, InputEvent)>>,
+    element: Reference<E>,
+    listeners: Vec<Box<Fn(&mut Slab<Box<UnsafeAny>>, InputEvent)>>,
 }
 
 impl<E> Install for BoundElement<E> where E: 'static + Element {
@@ -145,40 +143,49 @@ impl<E> From<BoundElement<E>> for Tree where E: 'static + Element {
 
 impl<E> ElementDelegate for BoundElement<E> where E: Element {
     fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let value = self.model.get(components);
-        self.element.layout(value, max_width, max_height, children)
+        self.element.get(components).layout(max_width, max_height, children)
     }
     fn display(&self, components: &Slab<Box<UnsafeAny>>, bounds: BoundingBox, list: &mut DisplayList) {
-        let value = self.model.get(components);
-        self.element.display(value, bounds, list);
+        self.element.get(components).display(bounds, list)
+    }
+    fn handle(&self, components: &mut Slab<Box<UnsafeAny>>, event: InputEvent) -> bool {
+        if self.listeners.len() == 0 {
+            return false;
+        }
+        for listener in self.listeners.iter() {
+            listener(components, event);
+        }
+        true
     }
 }
 
-pub fn element<E>(element: E, model: Reference<E::Model>) -> BoundElement<E> where E: Element {
+pub fn element<E>(element: Reference<E>) -> BoundElement<E> where E: Element {
     BoundElement {
         element: element,
-        model: model,
         listeners: Vec::new(),
     }
 }
 
 impl<E> BoundElement<E> where E: Element {
-    fn on<C: 'static>(&mut self, listener: ComponentRef<C>, callback: impl Fn(&mut C, InputEvent) + 'static) -> &mut BoundElement<E> {
-        self.listeners.push(Box::new(move |ui, event| {
-            let listener = &mut ui.components[listener.index];
+    pub fn on<C: 'static>(mut self, listener: ComponentRef<C>, callback: impl Fn(&mut C, InputEvent) + 'static) -> BoundElement<E> {
+        self.listeners.push(Box::new(move |components, event| {
+            let listener = &mut components[listener.index];
             callback(unsafe { listener.downcast_mut_unchecked() }, event);
         }));
         self
     }
 
-    // fn children(&mut self, children: Vec<Tree>) -> Tree {
-        
-    // }
+    pub fn children(self, children: Vec<Tree>) -> ElementWithChildren<E> {
+        ElementWithChildren {
+            element: self,
+            children: children,
+        }
+    }
 }
 
 /* element with children */
 
-struct ElementWithChildren<E: Element> {
+pub struct ElementWithChildren<E: Element> {
     element: BoundElement<E>,
     children: Vec<Tree>,
 }
@@ -186,9 +193,10 @@ struct ElementWithChildren<E: Element> {
 impl<E> Install for ElementWithChildren<E> where E: 'static + Element {
     fn install(self: Box<Self>, ui: &mut UI) -> usize {
         let element = *self;
-        let index = ui.element(Box::new(element.element));
+        let index = Box::new(element.element).install(ui);
         for Tree(child) in element.children.into_iter() {
-            child.install(ui);
+            let child_index = child.install(ui);
+            ui.add_child(index, child_index);
         }
         index
     }
@@ -237,7 +245,7 @@ pub struct UI {
 
     root: usize,
     elements: Slab<Box<ElementDelegate>>,
-    parents: Slab<usize>,
+    parents: Slab<Option<usize>>,
     children: Slab<Vec<usize>>,
     layout: Slab<BoundingBox>,
 
@@ -291,13 +299,14 @@ impl UI {
 
     fn element<E: 'static + ElementDelegate>(&mut self, element: Box<E>) -> usize {
         let index = self.elements.insert(element);
+        self.parents.insert(None);
         self.children.insert(Vec::new());
         self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
         index
     }
 
     fn add_child(&mut self, parent: usize, child: usize) {
-        self.parents[child] = parent;
+        self.parents[child] = Some(parent);
         self.children[parent].push(child);
     }
     
@@ -344,7 +353,7 @@ impl UI {
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let handler = match ev {
+        let mut handler = match ev {
             InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
                 // if let Some(dragging) = self.dragging {
                 //     Some(dragging)
@@ -366,14 +375,13 @@ impl UI {
             }
         };
 
-        // if let Some(handler) = handler {
-        //     let mut handler = handler;
-        //     while self.parents.contains_key(&handler) && !self.listeners.get(&handler).expect("invalid element id").contains::<Box<Fn(&mut UI, InputEvent)>>() {
-        //         handler = *self.parents.get(&handler).expect("invalid element id");
-        //     }
-        //     self.fire(handler, ev);
-        //     self.drain_queue();
-        // }
+        while let Some(element) = handler {
+            if self.elements[element].handle(&mut self.components, ev) {
+                break;
+            } else {
+                handler = self.parents[element];
+            }
+        }
 
         // if response.capture_keyboard {
         //     if let Some(ref focus) = self.keyboard_focus {
@@ -445,7 +453,7 @@ impl UI {
     fn layout(&mut self) {
         let mut root = Self::child_delegate(&self.components, &self.children, &self.elements, self.root);
         let (width, height) = root.layout(self.width, self.height);
-        Self::commit_delegates(&mut self.layout, root);
+        Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
     fn child_delegate<'a>(components: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<usize>>, elements: &'a Slab<Box<ElementDelegate>>, index: usize) -> ChildDelegate<'a> {
@@ -464,22 +472,24 @@ impl UI {
         }
     }
 
-    fn commit_delegates(layout: &mut Slab<BoundingBox>, delegate: ChildDelegate) {
-        layout[delegate.index] = delegate.bounds;
+    fn commit_delegates(layout: &mut Slab<BoundingBox>, delegate: ChildDelegate, offset: Point) {
+        let offset = offset + delegate.bounds.pos;
+        layout[delegate.index].pos = offset;
+        layout[delegate.index].size = delegate.bounds.size;
         for child in delegate.children {
-            Self::commit_delegates(layout, child);
+            Self::commit_delegates(layout, child, offset);
         }
     }
 }
 
 
-pub struct Rectangle;
+pub struct Rectangle {
+    pub color: [f32; 4],
+}
 
 impl Element for Rectangle {
-    type Model = [f32; 4];
-
-    fn display(&self, color: &[f32; 4], bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *color });
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
     }
 }
 
@@ -532,19 +542,21 @@ impl Default for ContainerStyle {
 // }
 
 
-pub struct Padding;
+pub struct Padding {
+    pub padding: f32,
+}
 
 impl Element for Padding {
-    type Model = f32;
-
-    fn layout(&self, padding: &f32, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
-            child.layout(max_width - 2.0 * padding, max_height - 2.0 * padding);
-            child.offset(*padding, *padding);
+            let (child_width, child_height) = child.layout(max_width - 2.0 * self.padding, max_height - 2.0 * self.padding);
+            width = width.max(child_width);
+            height = height.max(child_height);
+            child.offset(self.padding, self.padding);
         }
-        (width, height)
+        (width + 2.0 * self.padding, height + 2.0 * self.padding)
     }
 }
 

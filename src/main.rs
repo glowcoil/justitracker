@@ -79,7 +79,22 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
 
-    ui.root(element(Rectangle, Reference::value([0.0, 0.0, 0.1, 1.0])));
+    ui.root(
+        component(0i32, |cmp| {
+            element(Reference::value(Padding { padding: 5.0 })).children(vec![
+                element(Reference::value(Rectangle { color: [0.0, 0.0, 0.1, 1.0] })).children(vec![
+                    element(Reference::value(Padding { padding: 20.0 })).children(vec![
+                        element(Reference::value(Rectangle { color: [1.0, 0.0, 0.1, 1.0] })).on(cmp, |cmp, ev| {
+                            if let InputEvent::MousePress { button: MouseButton::Left } = ev {
+                                *cmp += 1;
+                            }
+                            println!("{}", cmp);
+                        }).into()
+                    ]).into()
+                ]).into()
+            ]).into()
+        })
+    );
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
     // // ui.set_global_style::<StackStyle>(StackStyle::grow(Grow::Equal).spacing(5.0));
@@ -154,28 +169,28 @@ fn main() {
             _ => None,
         };
 
-        // if let Some(input_event) = input_event {
-        //     let response = ui.input(input_event);
+        if let Some(input_event) = input_event {
+            let response = ui.input(input_event);
 
-        //     if response.mouse_cursor == MouseCursor::NoneCursor {
-        //         if !cursor_hide {
-        //             renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide);
-        //             cursor_hide = true;
-        //         }
-        //     } else {
-        //         if cursor_hide {
-        //             renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal);
-        //             cursor_hide = false;
-        //         }
-        //         renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
-        //     }
+            if response.mouse_cursor == MouseCursor::NoneCursor {
+                if !cursor_hide {
+                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide);
+                    cursor_hide = true;
+                }
+            } else {
+                if cursor_hide {
+                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal);
+                    cursor_hide = false;
+                }
+                renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
+            }
 
-        //     if let Some((x, y)) = response.set_mouse_position {
-        //         renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32);
-        //     }
+            if let Some((x, y)) = response.set_mouse_position {
+                renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32);
+            }
 
             renderer.render(ui.display());
-        // }
+        }
 
         glutin::ControlFlow::Continue
     });
