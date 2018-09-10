@@ -81,10 +81,10 @@ fn main() {
 
     ui.root(
         component(0i32, |cmp| {
-            element(Reference::value(Padding { padding: 5.0 })).children(vec![
-                element(Reference::value(Rectangle { color: [0.0, 0.0, 0.1, 1.0] })).children(vec![
-                    element(Reference::value(Padding { padding: 20.0 })).children(vec![
-                        element(Reference::value(Rectangle { color: [1.0, 0.0, 0.1, 1.0] })).on(cmp, |cmp, ev| {
+            element(Dynamic::value(Padding { padding: 5.0 })).children(vec![
+                element(Dynamic::value(Rectangle { color: [0.0, 0.0, 0.1, 1.0] })).children(vec![
+                    element(Dynamic::value(Padding { padding: 20.0 })).children(vec![
+                        element(Dynamic::value(Rectangle { color: [1.0, 0.0, 0.1, 1.0] })).on(cmp, |cmp, ev| {
                             if let InputEvent::MousePress { button: MouseButton::Left } = ev {
                                 *cmp += 1;
                             }

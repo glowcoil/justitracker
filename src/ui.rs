@@ -28,7 +28,7 @@ trait Install {
 
 pub struct Component<C> {
     component: Box<C>,
-    template: Box<Fn(ComponentRef<C>) -> Tree>,
+    template: Box<Fn(ComponentReference<C>) -> Tree>,
     listeners: AnyMap,
 }
 
@@ -47,21 +47,21 @@ impl<C> From<Component<C>> for Tree where C: 'static {
     }
 }
 
-pub struct ComponentRef<C> {
+pub struct ComponentReference<C> {
     index: usize,
     phantom_data: PhantomData<C>,
 }
 
-impl<C> ComponentRef<C> {
-    fn new(index: usize) -> ComponentRef<C> {
-        ComponentRef {
+impl<C> ComponentReference<C> {
+    fn new(index: usize) -> ComponentReference<C> {
+        ComponentReference {
             index: index,
             phantom_data: PhantomData,
         }
     }
 }
 
-pub fn component<C, F>(component: C, template: F) -> Component<C> where F: 'static + Fn(ComponentRef<C>) -> Tree {
+pub fn component<C, F>(component: C, template: F) -> Component<C> where F: 'static + Fn(ComponentReference<C>) -> Tree {
     Component {
         component: Box::new(component),
         template: Box::new(template),
@@ -70,7 +70,7 @@ pub fn component<C, F>(component: C, template: F) -> Component<C> where F: 'stat
 }
 
 impl<C> Component<C> {
-    fn on<D: 'static, E>(&mut self, listener: ComponentRef<D>, callback: impl Fn(&mut D, E) + 'static) -> &mut Component<C> {
+    fn on<D: 'static, E>(&mut self, listener: ComponentReference<D>, callback: impl Fn(&mut D, E) + 'static) -> &mut Component<C> {
         self.listeners.insert(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: E| {
             let listener = &mut components[listener.index];
             callback(unsafe { listener.downcast_mut_unchecked() }, event);
@@ -125,7 +125,7 @@ impl<'a> ChildDelegate<'a> {
 }
 
 pub struct BoundElement<E: Element> {
-    element: Reference<E>,
+    element: Dynamic<E>,
     listeners: Vec<Box<Fn(&mut Slab<Box<UnsafeAny>>, InputEvent)>>,
 }
 
@@ -159,7 +159,7 @@ impl<E> ElementDelegate for BoundElement<E> where E: Element {
     }
 }
 
-pub fn element<E>(element: Reference<E>) -> BoundElement<E> where E: Element {
+pub fn element<E>(element: Dynamic<E>) -> BoundElement<E> where E: Element {
     BoundElement {
         element: element,
         listeners: Vec::new(),
@@ -167,7 +167,7 @@ pub fn element<E>(element: Reference<E>) -> BoundElement<E> where E: Element {
 }
 
 impl<E> BoundElement<E> where E: Element {
-    pub fn on<C: 'static>(mut self, listener: ComponentRef<C>, callback: impl Fn(&mut C, InputEvent) + 'static) -> BoundElement<E> {
+    pub fn on<C: 'static>(mut self, listener: ComponentReference<C>, callback: impl Fn(&mut C, InputEvent) + 'static) -> BoundElement<E> {
         self.listeners.push(Box::new(move |components, event| {
             let listener = &mut components[listener.index];
             callback(unsafe { listener.downcast_mut_unchecked() }, event);
@@ -214,24 +214,31 @@ pub struct Property<A> {
     value: A,
 }
 
-pub struct Reference<A>(ReferenceType<A>);
+pub struct Dynamic<A>(Box<DynamicInner<Value=A>>);
 
-enum ReferenceType<A> {
-    Value(A),
-    Getter(fn(&Slab<Box<UnsafeAny>>) -> &A),
+pub trait DynamicInner {
+    type Value;
+
+    fn get(&self, components: &Slab<Box<UnsafeAny>>) -> Value;
 }
 
-impl<A> Reference<A> {
-    pub fn value(value: A) -> Reference<A> {
-        Reference(ReferenceType::Value(value))
-    }
+pub struct Constant<A> {
+    value: A,
+}
 
-    fn get<'a>(&'a self, ui: &'a Slab<Box<UnsafeAny>>) -> &'a A {
-        let Reference(ref inner) = *self;
-        match inner {
-            ReferenceType::Value(value) => &value,
-            ReferenceType::Getter(f) => f(ui),
-        }
+impl<A> DynamicInner for Constant<A> {
+    type Value = &A;
+
+    fn get<'a>(&'a self, _: &Slab<Box<UnsafeAny>>) -> &'a A {
+        &self.value
+    }
+}
+
+impl<'a, A> DynamicInner for ComponentReference<A> {
+    type Value = &'a A;
+
+    fn get(&self, components: &'a Slab<Box<UnsafeAny>>) -> &'a A {
+        &components[self.index]
     }
 }
 
@@ -292,9 +299,9 @@ impl UI {
         self.layout();
     }
 
-    fn component<C: 'static>(&mut self, component: Box<C>) -> ComponentRef<C> {
+    fn component<C: 'static>(&mut self, component: Box<C>) -> ComponentReference<C> {
         let index = self.components.insert(component);
-        ComponentRef::new(index)
+        ComponentReference::new(index)
     }
 
     fn element<E: 'static + ElementDelegate>(&mut self, element: Box<E>) -> usize {
