@@ -15,11 +15,11 @@ extern crate anymap;
 extern crate unsafe_any;
 extern crate slab;
 
+use std::rc::Rc;
+
 use glium::glutin;
 
-use std::collections::VecDeque;
-use std::rc::Rc;
-use std::cell::RefCell;
+use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
 use std::sync::mpsc;
 
@@ -79,22 +79,29 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
 
+    let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
+    let font = Rc::new(collection.into_font().unwrap());
+
     ui.root(
-        component(0i32, |cmp| {
+        component(0i32, move |cmp| {
             element(cmp.map(|n| Padding { padding: *n as f32 })).children(vec![
-                element(Constant::new(Rectangle { color: [0.0, 0.0, 0.1, 1.0] })).children(vec![
+                element(Constant::new(BackgroundColor { color: [0.0, 0.0, 0.1, 1.0] })).children(vec![
                     element(Constant::new(Padding { padding: 20.0 })).children(vec![
-                        element(Constant::new(Rectangle { color: [1.0, 0.0, 0.1, 1.0] })).on(cmp, |cmp, ev| {
+                        element(Constant::new(BackgroundColor { color: [1.0, 0.0, 0.1, 1.0] })).on(cmp, |cmp, ev, ctx| {
                             if let InputEvent::MousePress { button: MouseButton::Left } = ev {
                                 *cmp += 1;
                             }
                             println!("{}", cmp);
-                        }).into()
+                        }).children(vec![
+                            // element(Constant::new(Text { text: "hello".into(), style: &TextStyle { font: font.clone(), scale: Scale::uniform(14.0) } })).into()
+                        ]).into()
                     ]).into()
                 ]).into()
             ]).into()
         })
     );
+
+    // ui.root(Button::new(Text::new("));
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
     // // ui.set_global_style::<StackStyle>(StackStyle::grow(Grow::Equal).spacing(5.0));

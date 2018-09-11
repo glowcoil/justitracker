@@ -11,6 +11,8 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::f32;
 
+use std::rc::Rc;
+
 use slab::Slab;
 
 use glium::glutin;
@@ -32,6 +34,16 @@ pub struct Component<C> {
     listeners: AnyMap,
 }
 
+impl<C> Component<C> {
+    fn on<D: 'static, E>(&mut self, listener: ComponentReference<D>, callback: impl Fn(&mut D, E, Context<D>) + 'static) -> &mut Component<C> {
+        self.listeners.insert(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: E| {
+            let listener = &mut components[listener.index];
+            callback(unsafe { listener.downcast_mut_unchecked() }, event, Context { phantom_data: PhantomData });
+        }));
+        self
+    }
+}
+
 impl<C> Install for Component<C> where C: 'static {
     fn install(self: Box<Self>, ui: &mut UI) -> usize {
         let component = *self;
@@ -47,11 +59,21 @@ impl<C> From<Component<C>> for Tree where C: 'static {
     }
 }
 
-#[derive(Copy, Clone)]
 pub struct ComponentReference<C> {
     index: usize,
-    phantom_data: PhantomData<C>,
+    phantom_data: PhantomData<*const C>,
 }
+
+impl<C> Clone for ComponentReference<C> {
+    fn clone(&self) -> ComponentReference<C> {
+        ComponentReference {
+            index: self.index,
+            phantom_data: PhantomData,
+        }
+    }
+}
+
+impl<C> Copy for ComponentReference<C> {}
 
 impl<C> ComponentReference<C> {
     fn new(index: usize) -> ComponentReference<C> {
@@ -70,16 +92,6 @@ pub fn component<C, F>(component: C, template: F) -> Component<C> where F: 'stat
     }
 }
 
-impl<C> Component<C> {
-    fn on<D: 'static, E>(&mut self, listener: ComponentReference<D>, callback: impl Fn(&mut D, E) + 'static) -> &mut Component<C> {
-        self.listeners.insert(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: E| {
-            let listener = &mut components[listener.index];
-            callback(unsafe { listener.downcast_mut_unchecked() }, event);
-        }));
-        self
-    }
-}
-
 /* element */
 
 pub trait Element {
@@ -91,7 +103,7 @@ pub trait Element {
             width = width.max(child_width);
             height = height.max(child_height);
         }
-        (max_width, max_height)
+        (width, height)
     }
 
     fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {}
@@ -125,24 +137,24 @@ impl<'a> ChildDelegate<'a> {
     }
 }
 
-pub struct BoundElement<E: Element, D: Dynamic<Value=E>> {
-    element: D,
+pub struct BoundElement<E: Element> {
+    element: Dynamic<E>,
     listeners: Vec<Box<Fn(&mut Slab<Box<UnsafeAny>>, InputEvent)>>,
 }
 
-impl<E: Element + 'static, D: Dynamic<Value=E> + 'static> Install for BoundElement<E, D> {
+impl<E: Element + 'static> Install for BoundElement<E> {
     fn install(self: Box<Self>, ui: &mut UI) -> usize {
         ui.element(self)
     }
 }
 
-impl<E: Element + 'static, D: Dynamic<Value=E> + 'static> From<BoundElement<E, D>> for Tree where E: 'static + Element {
-    fn from(element: BoundElement<E, D>) -> Self {
+impl<E: Element + 'static> From<BoundElement<E>> for Tree where E: 'static + Element {
+    fn from(element: BoundElement<E>) -> Self {
         Tree(Box::new(element))
     }
 }
 
-impl<E: Element, D: Dynamic<Value=E>> ElementDelegate for BoundElement<E, D> {
+impl<E: Element> ElementDelegate for BoundElement<E> {
     fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         self.element.with(components, |element| element.layout(max_width, max_height, children))
     }
@@ -160,16 +172,16 @@ impl<E: Element, D: Dynamic<Value=E>> ElementDelegate for BoundElement<E, D> {
     }
 }
 
-impl<E: Element, D: Dynamic<Value=E>> BoundElement<E, D> {
-    pub fn on<C: 'static>(mut self, listener: ComponentReference<C>, callback: impl Fn(&mut C, InputEvent) + 'static) -> BoundElement<E, D> {
+impl<E: Element> BoundElement<E> {
+    pub fn on<C: 'static>(mut self, listener: ComponentReference<C>, callback: impl Fn(&mut C, InputEvent, Context<C>) + 'static) -> BoundElement<E> {
         self.listeners.push(Box::new(move |components, event| {
             let listener = &mut components[listener.index];
-            callback(unsafe { listener.downcast_mut_unchecked() }, event);
+            callback(unsafe { listener.downcast_mut_unchecked() }, event, Context { phantom_data: PhantomData });
         }));
         self
     }
 
-    pub fn children(self, children: Vec<Tree>) -> ElementWithChildren<E, D> {
+    pub fn children(self, children: Vec<Tree>) -> ElementWithChildren<E> {
         ElementWithChildren {
             element: self,
             children: children,
@@ -179,12 +191,12 @@ impl<E: Element, D: Dynamic<Value=E>> BoundElement<E, D> {
 
 /* element with children */
 
-pub struct ElementWithChildren<E: Element, D: Dynamic<Value=E>> {
-    element: BoundElement<E, D>,
+pub struct ElementWithChildren<E: Element> {
+    element: BoundElement<E>,
     children: Vec<Tree>,
 }
 
-impl<E: Element + 'static, D: Dynamic<Value=E> + 'static> Install for ElementWithChildren<E, D> {
+impl<E: Element + 'static> Install for ElementWithChildren<E> {
     fn install(self: Box<Self>, ui: &mut UI) -> usize {
         let element = *self;
         let index = Box::new(element.element).install(ui);
@@ -196,8 +208,8 @@ impl<E: Element + 'static, D: Dynamic<Value=E> + 'static> Install for ElementWit
     }
 }
 
-impl<E: Element + 'static, D: Dynamic<Value=E> + 'static> From<ElementWithChildren<E, D>> for Tree {
-    fn from(element: ElementWithChildren<E, D>) -> Self {
+impl<E: Element + 'static> From<ElementWithChildren<E>> for Tree {
+    fn from(element: ElementWithChildren<E>) -> Self {
         Tree(Box::new(element))
     }
 }
@@ -208,28 +220,39 @@ pub struct Property<A> {
     value: A,
 }
 
-pub trait Dynamic: Sized {
-    type Value;
+pub struct Dynamic<A>(Box<DynamicInner<Value=A>>);
 
-    fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R;
-
-    fn map<B, F: Fn(&Self::Value) -> B>(self, f: F) -> Map<Self, F> {
-        Map {
-            dynamic: self,
-            f: f,
-        }
+impl<A> Dynamic<A> {
+    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a A {
+        inner.get(components)
     }
 
-    fn map2<A1: Dynamic, A2: Dynamic, B, F>(f: F, dynamic1: A1, dynamic2: A2) -> Map2<A1, A2, F> where F: Fn(&A1::Value, &A2::Value) -> B {
-        Map2 {
+    pub fn map<B, F: Fn(&A) -> B>(self, f: F) -> Dynamic<B> {
+        let Dynamic(inner) = self;
+        Dynamic(Box::new(Map {
+            dynamic: self,
+            f: f,
+        }))
+    }
+
+    pub fn map2<A1, A2, B, F>(dynamic1: Dynamic<A1>, dynamic2: Dynamic<A2>, f: F) -> Dynamic<B> where F: Fn(&A1, &A2) -> B {
+        let Dynamic(inner1) = dynamic1;
+        let Dynamic(inner2) = dynamic2;
+        Dynamic(Box::new(Map2 {
             dynamic1: dynamic1,
             dynamic2: dynamic2,
             f: f,
-        }
+        }))
     }
 }
 
-pub fn element<E: Element, D: Dynamic<Value=E>>(element: D) -> BoundElement<E, D> {
+trait DynamicInner {
+    type Value: ?Sized;
+
+    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a Self::Value;
+}
+
+pub fn element<E: Element>(element: Dynamic<E>) -> BoundElement<E> {
     BoundElement {
         element: element,
         listeners: Vec::new(),
@@ -241,35 +264,33 @@ pub struct Constant<A> {
 }
 
 impl<A> Constant<A> {
-    pub fn new(value: A) -> Constant<A> {
-        Constant {
-            value: value,
-        }
+    pub fn new(value: A) -> Dynamic<A> {
+        Dynamic(Box::new(Constant { value: value }))
     }
 }
 
-impl<A> Dynamic for Constant<A> {
+impl<A> DynamicInner for Constant<A> {
     type Value = A;
 
-    fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R {
-        cont(&self.value)
+    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a Self::Value {
+        &self.value
     }
 }
 
-impl<A: 'static> Dynamic for ComponentReference<A> {
+impl<A: 'static> DynamicInner for ComponentReference<A> {
     type Value = A;
 
-    fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R {
-        cont(unsafe { components[self.index].downcast_ref_unchecked() })
+    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a Self::Value {
+        &unsafe { components[self.index].downcast_ref_unchecked() }
     }
 }
 
 pub struct Map<A, F> {
-    dynamic: A,
+    dynamic: Dynamic<A>,
     f: F,
 }
 
-impl<A: Dynamic, B, F> Dynamic for Map<A, F> where F: Fn(&A::Value) -> B {
+impl<A, B, F> DynamicInner for Map<A, F> where F: Fn(&A) -> B {
     type Value = B;
 
     fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R {
@@ -278,18 +299,32 @@ impl<A: Dynamic, B, F> Dynamic for Map<A, F> where F: Fn(&A::Value) -> B {
 }
 
 pub struct Map2<A1, A2, F> {
-    dynamic1: A1,
-    dynamic2: A2,
+    dynamic1: Dynamic<A1>,
+    dynamic2: Dynamic<A2>,
     f: F,
 }
 
-impl<A1: Dynamic, A2: Dynamic, B, F> Dynamic for Map2<A1, A2, F> where F: Fn(&A1::Value, &A2::Value) -> B {
+impl<A1, A2, B, F> DynamicInner for Map2<A1, A2, F> where F: Fn(&A1, &A2) -> B {
     type Value = B;
 
     fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R {
         self.dynamic1.with(components, |value1| self.dynamic2.with(components, |value2| cont(&(self.f)(value1, value2))))
     }
 }
+
+/* events */
+
+pub struct Context<C> {
+    phantom_data: PhantomData<C>,
+}
+
+impl<C> Context<C> {
+    pub fn fire<E>(event: E) where C: Fire<E> {
+        
+    }
+}
+
+pub trait Fire<E> {}
 
 /* ui */
 
@@ -541,63 +576,38 @@ impl UI {
 }
 
 
-pub struct Rectangle {
+pub struct BackgroundColor {
     pub color: [f32; 4],
 }
 
-impl Element for Rectangle {
+impl Element for BackgroundColor {
     fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
         list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
     }
 }
 
 
-pub struct ContainerStyle {
-    min_width: f32,
+pub struct Container {
     max_width: f32,
-    min_height: f32,
     max_height: f32,
 }
 
-impl Default for ContainerStyle {
-    fn default() -> ContainerStyle {
-        ContainerStyle {
-            min_width: 0.0,
-            max_width: f32::INFINITY,
-            min_height: 0.0,
-            max_height: f32::INFINITY,
+impl Element for Container {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let max_width = self.max_width.min(max_width);
+        let max_height = self.max_height.min(max_height);
+
+        let mut width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+
+        for child in children {
+            let (child_width, child_height) = child.layout(max_width, max_height);
+            width = width.max(child_width);
+            height = height.max(child_height);
         }
+        (width, height)
     }
 }
-
-// pub struct Container;
-
-// impl Element for Container {
-//     type Model = ContainerStyle;
-
-//     fn measure(&self, model: &ContainerStyle, children: &[BoundingBox]) -> BoundingBox {
-//         let mut width: f32 = 0.0;
-//         let mut height: f32 = 0.0;
-
-//         for child_box in children {
-//             width = width.max(child_box.size.x);
-//             height = height.max(child_box.size.y);
-//         }
-
-//         width = width.max(model.min_width).min(model.max_width);
-//         height = height.max(model.min_height).min(model.max_height);
-
-//         BoundingBox::new(0.0, 0.0, width, height)
-//     }
-
-//     fn arrange(&self, model: &ContainerStyle, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
-//         for child_box in children.iter_mut() {
-//             *child_box = bounds;
-//         }
-
-//         bounds
-//     }
-// }
 
 
 pub struct Padding {
@@ -615,6 +625,152 @@ impl Element for Padding {
             child.offset(self.padding, self.padding);
         }
         (width + 2.0 * self.padding, height + 2.0 * self.padding)
+    }
+}
+
+
+pub struct Row {
+    pub spacing: f32,
+}
+
+impl Element for Row {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let mut x: f32 = 0.0;
+        let mut height: f32 = 0.0;
+        for child in children {
+            let (child_width, child_height) = child.layout(max_width - x, max_height);
+            child.offset(x, 0.0);
+            x += child_width + self.spacing;
+            height = height.max(child_height);
+        }
+        (x - self.spacing, height)
+    }
+}
+
+
+pub struct Column {
+    pub spacing: f32,
+}
+
+impl Element for Column {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let mut width: f32 = 0.0;
+        let mut y: f32 = 0.0;
+        for child in children {
+            let (child_width, child_height) = child.layout(max_width, max_height - y);
+            child.offset(0.0, y);
+            width = width.max(child_width);
+            y += child_height + self.spacing;
+        }
+        (width, y - self.spacing)
+    }
+}
+
+
+pub struct TextStyle {
+    pub font: Rc<Font<'static>>,
+    pub scale: Scale,
+}
+
+pub struct Text<'a> {
+    pub text: &'a str,
+    pub style: &'a TextStyle,
+}
+
+impl<'a> Text<'a> {
+    // fn new(text: Dynamic<str>, style: Dynamic<TextStyle>) -> Tree {
+    //     element(Dynamic::map2(text, style, |text, style| Text { text: text, style: style })).into()
+    // }
+
+    fn layout_text(&self, x: f32, y: f32, max_width: f32, max_height: f32) -> (Vec<PositionedGlyph<'static>>, (f32, f32)) {
+        use unicode_normalization::UnicodeNormalization;
+
+        let mut glyphs = Vec::new();
+        let mut wrapped = false;
+
+        let v_metrics = self.style.font.v_metrics(self.style.scale);
+        let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
+        let mut caret = point(x, y + v_metrics.ascent);
+        let mut last_glyph_id = None;
+        for c in self.text.nfc() {
+            if c.is_control() {
+                match c {
+                    '\r' => {
+                        caret = point(0.0, caret.y + advance_height);
+                    }
+                    '\n' => {},
+                    _ => {}
+                }
+                continue;
+            }
+            let base_glyph = if let Some(glyph) = self.style.font.glyph(c) {
+                glyph
+            } else {
+                continue;
+            };
+            if let Some(id) = last_glyph_id.take() {
+                caret.x += self.style.font.pair_kerning(self.style.scale, id, base_glyph.id());
+            }
+            last_glyph_id = Some(base_glyph.id());
+            let mut glyph = base_glyph.scaled(self.style.scale).positioned(caret);
+            if let Some(bb) = glyph.pixel_bounding_box() {
+                if bb.max.x > (x + max_width) as i32 {
+                    wrapped = true;
+                    caret = point(x, caret.y + advance_height);
+                    glyph = glyph.into_unpositioned().positioned(caret);
+                    last_glyph_id = None;
+                }
+            }
+            caret.x += glyph.unpositioned().h_metrics().advance_width;
+            glyphs.push(glyph.standalone());
+        }
+
+        let width = if wrapped { max_width } else { caret.x };
+        (glyphs, (width, v_metrics.ascent - v_metrics.descent))
+    }
+}
+
+impl<'a> Element for Text<'a> {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let (_, (width, height)) = self.layout_text(0.0, 0.0, max_width, max_height);
+        (width, height)
+    }
+
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+        let (glyphs, _) = self.layout_text(bounds.pos.x, bounds.pos.y, bounds.size.x, bounds.size.y);
+        for glyph in glyphs.iter() {
+            list.glyph(glyph.standalone());
+        }
+    }
+}
+
+
+//         let mut color = [0.15, 0.18, 0.23, 1.0];
+//         if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
+//             if bounds.contains_point(mouse_drag_origin) {
+//                 color = [0.02, 0.2, 0.6, 1.0];
+//             }
+//         } else if bounds.contains_point(input_state.mouse_position) {
+//             color = [0.3, 0.4, 0.5, 1.0];
+//         }
+
+pub struct Button {
+    hover: bool,
+}
+
+impl Button {
+    pub fn new(child: Tree) -> Component<Button> {
+        component(Button { hover: false }, |cmp| {
+            element(cmp.map(|button| {
+                BackgroundColor {
+                    color: if button.hover { [0.3, 0.4, 0.5, 1.0] } else { [0.15, 0.18, 0.23, 1.0] }
+                }
+            })).on(cmp, |cmp, ev, ctx| {
+                if let InputEvent::MousePress { button: MouseButton::Left } = ev {
+                    cmp.hover = !cmp.hover;
+                }
+            }).children(vec![child]).into()
+        })
     }
 }
 
@@ -748,128 +904,6 @@ impl Element for Padding {
 //     None,
 //     Equal,
 //     Ratio(Vec<f32>),
-// }
-
-
-// style! {
-//     struct TextStyle {
-//         font: ResourceRef<Font<'static>>,
-//         scale: Scale,
-//     },
-//     TextStylePatch
-// }
-
-// impl Default for TextStyle {
-//     fn default() -> TextStyle {
-//         TextStyle {
-//             font: ResourceRef::new(0),
-//             scale: Scale::uniform(14.0),
-//         }
-//     }
-// }
-
-// pub struct Label {
-//     text: Cow<'static, str>,
-//     glyphs: Vec<PositionedGlyph<'static>>,
-//     size: Point,
-// }
-
-// impl Label {
-//     pub fn with_text<S>(text: S) -> impl FnOnce(Context<Label>) -> Label where S: Into<Cow<'static, str>> {
-//         move |mut ctx| {
-//             let label = {
-//                 let resources = ctx.resources();
-//                 let box_style = resources.get_style::<BoxStyle>();
-//                 let text_style = resources.get_style::<TextStyle>();
-//                 let font = resources.get_resource::<Font>(text_style.font);
-
-//                 let mut label = Label {
-//                     text: text.into(),
-//                     glyphs: Vec::new(),
-//                     size: Point::new(0.0, 0.0),
-//                 };
-//                 label.size = label.layout(text_style.scale, font, Point::new(box_style.padding, box_style.padding));
-
-//                 label
-//             };
-
-//             ctx.receive(|myself: &mut Label, ctx, s: String| {
-//                 myself.text = s.into();
-//             });
-//             ctx.receive(|myself: &mut Label, ctx, s: &'static str| {
-//                 myself.text = s.into();
-//             });
-
-//             label
-//         }
-//     }
-
-//     fn layout(&mut self, scale: Scale, font: &Font, pos: Point) -> Point {
-//         use unicode_normalization::UnicodeNormalization;
-//         self.glyphs.clear();
-
-//         let v_metrics = font.v_metrics(scale);
-//         let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
-//         let mut caret = point(pos.x, pos.y + v_metrics.ascent);
-//         let mut last_glyph_id = None;
-//         for c in self.text.nfc() {
-//             if c.is_control() {
-//                 match c {
-//                     '\r' => {
-//                         // caret = point(pos.x, caret.y + advance_height);
-//                     }
-//                     '\n' => {},
-//                     _ => {}
-//                 }
-//                 continue;
-//             }
-//             let base_glyph = if let Some(glyph) = font.glyph(c) {
-//                 glyph
-//             } else {
-//                 continue;
-//             };
-//             if let Some(id) = last_glyph_id.take() {
-//                 caret.x += font.pair_kerning(scale, id, base_glyph.id());
-//             }
-//             last_glyph_id = Some(base_glyph.id());
-//             let mut glyph = base_glyph.scaled(scale).positioned(caret);
-//             // if let Some(bb) = glyph.pixel_bounding_box() {
-//             //     if bb.max.x > (pos.x + size.x) as i32 {
-//             //         caret = point(pos.x, caret.y + advance_height);
-//             //         glyph = glyph.into_unpositioned().positioned(caret);
-//             //         last_glyph_id = None;
-//             //     }
-//             // }
-//             caret.x += glyph.unpositioned().h_metrics().advance_width;
-//             self.glyphs.push(glyph.standalone());
-//         }
-
-//         Point::new(caret.x - pos.x, v_metrics.ascent - v_metrics.descent)
-//     }
-// }
-
-// impl Element for Label {
-//     fn measure(&self, resources: &Resources, children: &[BoundingBox]) -> BoundingBox {
-//         let box_style = resources.get_style::<BoxStyle>();
-//         BoundingBox { pos: Point::new(0.0, 0.0), size: self.size + Point::new(2.0 * box_style.padding, 2.0 * box_style.padding) }
-//     }
-
-//     fn arrange(&mut self, resources: &Resources, bounds: BoundingBox, children: &mut [BoundingBox]) -> BoundingBox {
-//         let box_style = resources.get_style::<BoxStyle>();
-//         let text_style = resources.get_style::<TextStyle>();
-//         let font = resources.get_resource::<Font>(text_style.font);
-//         self.size = self.layout(text_style.scale, font, bounds.pos + Point::new(box_style.padding, box_style.padding));
-//         BoundingBox { pos: bounds.pos, size: self.size + Point::new(2.0 * box_style.padding, 2.0 * box_style.padding) }
-//     }
-
-//     fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
-//         let box_style = resources.get_style::<BoxStyle>();
-
-//         list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: box_style.color });
-//         for glyph in self.glyphs.iter() {
-//             list.glyph(glyph.standalone());
-//         }
-//     }
 // }
 
 
