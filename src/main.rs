@@ -82,26 +82,12 @@ fn main() {
     let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
     let font = Rc::new(collection.into_font().unwrap());
 
-    ui.root(
-        component(0i32, move |cmp| {
-            element(cmp.map(|n| Padding { padding: *n as f32 })).children(vec![
-                element(Constant::new(BackgroundColor { color: [0.0, 0.0, 0.1, 1.0] })).children(vec![
-                    element(Constant::new(Padding { padding: 20.0 })).children(vec![
-                        element(Constant::new(BackgroundColor { color: [1.0, 0.0, 0.1, 1.0] })).on(cmp, |cmp, ev, ctx| {
-                            if let InputEvent::MousePress { button: MouseButton::Left } = ev {
-                                *cmp += 1;
-                            }
-                            println!("{}", cmp);
-                        }).children(vec![
-                            // element(Constant::new(Text { text: "hello".into(), style: &TextStyle { font: font.clone(), scale: Scale::uniform(14.0) } })).into()
-                        ]).into()
-                    ]).into()
-                ]).into()
-            ]).into()
-        })
-    );
-
-    // ui.root(Button::new(Text::new("));
+    let text = ui.element(Text { text: "test".to_string(), style: TextStyle { font: font, scale: Scale::uniform(14.0) } }, &[]);
+    let padding = ui.element(Padding { padding: 10.0 }, &[text]);
+    let root = ui.element(BackgroundColor { color: [1.0, 0.0, 0.0, 1.0] }, &[padding]);
+    let cmp = ui.component(0i32);
+    ui.listen(root, Listener::new(cmp, |cmp, event| { *cmp += 1; println!("{}", cmp); }));
+    ui.root(root);
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
     // // ui.set_global_style::<StackStyle>(StackStyle::grow(Grow::Equal).spacing(5.0));
@@ -128,7 +114,7 @@ fn main() {
                     Some(InputEvent::CursorMoved { position: Point { x: x as f32, y: y as f32 } })
                 }
                 glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
-                    ui.set_modifiers(KeyboardModifiers::from_glutin(modifiers));
+                    ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
 
                     let button = match button {
                         glutin::MouseButton::Left => Some(MouseButton::Left),
@@ -151,7 +137,7 @@ fn main() {
                     }
                 }
                 glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
-                    ui.set_modifiers(KeyboardModifiers::from_glutin(input.modifiers));
+                    ui.modifiers(KeyboardModifiers::from_glutin(input.modifiers));
 
                     if let Some(keycode) = input.virtual_keycode {
                         let button = KeyboardButton::from_glutin(keycode);

@@ -20,44 +20,10 @@ use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
-pub struct Tree(Box<Install>);
+/* references */
 
-trait Install {
-    fn install(self: Box<Self>, ui: &mut UI) -> usize;
-}
-
-/* component */
-
-pub struct Component<C> {
-    component: Box<C>,
-    template: Box<Fn(ComponentReference<C>) -> Tree>,
-    listeners: AnyMap,
-}
-
-impl<C> Component<C> {
-    fn on<D: 'static, E>(&mut self, listener: ComponentReference<D>, callback: impl Fn(&mut D, E, Context<D>) + 'static) -> &mut Component<C> {
-        self.listeners.insert(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: E| {
-            let listener = &mut components[listener.index];
-            callback(unsafe { listener.downcast_mut_unchecked() }, event, Context { phantom_data: PhantomData });
-        }));
-        self
-    }
-}
-
-impl<C> Install for Component<C> where C: 'static {
-    fn install(self: Box<Self>, ui: &mut UI) -> usize {
-        let component = *self;
-        let component_ref = ui.component(component.component);
-        let Tree(installer) = (component.template)(component_ref);
-        installer.install(ui)
-    }
-}
-
-impl<C> From<Component<C>> for Tree where C: 'static {
-    fn from(component: Component<C>) -> Self {
-        Tree(Box::new(component))
-    }
-}
+#[derive(Copy, Clone)]
+pub struct ElementReference(usize);
 
 pub struct ComponentReference<C> {
     index: usize,
@@ -82,20 +48,18 @@ impl<C> ComponentReference<C> {
             phantom_data: PhantomData,
         }
     }
-}
 
-pub fn component<C, F>(component: C, template: F) -> Component<C> where F: 'static + Fn(ComponentReference<C>) -> Tree {
-    Component {
-        component: Box::new(component),
-        template: Box::new(template),
-        listeners: AnyMap::new(),
+    pub fn reference(&self) -> Reference<C> {
+        Reference(*self)
     }
 }
+
+pub struct Reference<A: 'static>(ComponentReference<A>);
 
 /* element */
 
 pub trait Element {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout<'a>(&self, context: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -106,18 +70,12 @@ pub trait Element {
         (width, height)
     }
 
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {}
-}
-
-pub trait ElementDelegate {
-    fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32);
-    fn display(&self, components: &Slab<Box<UnsafeAny>>, bounds: BoundingBox, list: &mut DisplayList);
-    fn handle(&self, components: &mut Slab<Box<UnsafeAny>>, event: InputEvent) -> bool;
+    fn display<'a>(&self, context: &Context, bounds: BoundingBox, list: &mut DisplayList) {}
 }
 
 pub struct ChildDelegate<'a> {
-    index: usize,
-    element: &'a ElementDelegate,
+    reference: ElementReference,
+    element: &'a Element,
     components: &'a Slab<Box<UnsafeAny>>,
     bounds: BoundingBox,
     children: Vec<ChildDelegate<'a>>,
@@ -125,7 +83,7 @@ pub struct ChildDelegate<'a> {
 
 impl<'a> ChildDelegate<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        let (width, height) = self.element.layout(&self.components, max_width, max_height, &mut self.children);
+        let (width, height) = self.element.layout(&Context { components: self.components }, max_width, max_height, &mut self.children);
         self.bounds.size.x = width;
         self.bounds.size.y = height;
         (width, height)
@@ -137,194 +95,30 @@ impl<'a> ChildDelegate<'a> {
     }
 }
 
-pub struct BoundElement<E: Element> {
-    element: Dynamic<E>,
-    listeners: Vec<Box<Fn(&mut Slab<Box<UnsafeAny>>, InputEvent)>>,
+pub struct Context<'a> {
+    components: &'a Slab<Box<UnsafeAny>>,
 }
 
-impl<E: Element + 'static> Install for BoundElement<E> {
-    fn install(self: Box<Self>, ui: &mut UI) -> usize {
-        ui.element(self)
-    }
-}
-
-impl<E: Element + 'static> From<BoundElement<E>> for Tree where E: 'static + Element {
-    fn from(element: BoundElement<E>) -> Self {
-        Tree(Box::new(element))
+impl<'a> Context<'a> {
+    pub fn get<A>(&self, reference: Reference<A>) -> &'a A {
+        let Reference(component_reference) = reference;
+        &*unsafe { self.components[component_reference.index].downcast_ref_unchecked() }
     }
 }
 
-impl<E: Element> ElementDelegate for BoundElement<E> {
-    fn layout(&self, components: &Slab<Box<UnsafeAny>>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        self.element.with(components, |element| element.layout(max_width, max_height, children))
-    }
-    fn display(&self, components: &Slab<Box<UnsafeAny>>, bounds: BoundingBox, list: &mut DisplayList) {
-        self.element.with(components, |element| element.display(bounds, list))
-    }
-    fn handle(&self, components: &mut Slab<Box<UnsafeAny>>, event: InputEvent) -> bool {
-        if self.listeners.len() == 0 {
-            return false;
-        }
-        for listener in self.listeners.iter() {
-            listener(components, event);
-        }
-        true
-    }
+pub struct Listener<C, E> {
+    component: ComponentReference<C>,
+    callback: Box<Fn(&mut C, E)>,
 }
 
-impl<E: Element> BoundElement<E> {
-    pub fn on<C: 'static>(mut self, listener: ComponentReference<C>, callback: impl Fn(&mut C, InputEvent, Context<C>) + 'static) -> BoundElement<E> {
-        self.listeners.push(Box::new(move |components, event| {
-            let listener = &mut components[listener.index];
-            callback(unsafe { listener.downcast_mut_unchecked() }, event, Context { phantom_data: PhantomData });
-        }));
-        self
-    }
-
-    pub fn children(self, children: Vec<Tree>) -> ElementWithChildren<E> {
-        ElementWithChildren {
-            element: self,
-            children: children,
+impl<C, E> Listener<C, E> {
+    pub fn new<F: Fn(&mut C, E) + 'static>(component: ComponentReference<C>, callback: F) -> Listener<C, E> {
+        Listener {
+            component: component,
+            callback: Box::new(callback),
         }
     }
 }
-
-/* element with children */
-
-pub struct ElementWithChildren<E: Element> {
-    element: BoundElement<E>,
-    children: Vec<Tree>,
-}
-
-impl<E: Element + 'static> Install for ElementWithChildren<E> {
-    fn install(self: Box<Self>, ui: &mut UI) -> usize {
-        let element = *self;
-        let index = Box::new(element.element).install(ui);
-        for Tree(child) in element.children.into_iter() {
-            let child_index = child.install(ui);
-            ui.add_child(index, child_index);
-        }
-        index
-    }
-}
-
-impl<E: Element + 'static> From<ElementWithChildren<E>> for Tree {
-    fn from(element: ElementWithChildren<E>) -> Self {
-        Tree(Box::new(element))
-    }
-}
-
-/* property */
-
-pub struct Property<A> {
-    value: A,
-}
-
-pub struct Dynamic<A>(Box<DynamicInner<Value=A>>);
-
-impl<A> Dynamic<A> {
-    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a A {
-        inner.get(components)
-    }
-
-    pub fn map<B, F: Fn(&A) -> B>(self, f: F) -> Dynamic<B> {
-        let Dynamic(inner) = self;
-        Dynamic(Box::new(Map {
-            dynamic: self,
-            f: f,
-        }))
-    }
-
-    pub fn map2<A1, A2, B, F>(dynamic1: Dynamic<A1>, dynamic2: Dynamic<A2>, f: F) -> Dynamic<B> where F: Fn(&A1, &A2) -> B {
-        let Dynamic(inner1) = dynamic1;
-        let Dynamic(inner2) = dynamic2;
-        Dynamic(Box::new(Map2 {
-            dynamic1: dynamic1,
-            dynamic2: dynamic2,
-            f: f,
-        }))
-    }
-}
-
-trait DynamicInner {
-    type Value: ?Sized;
-
-    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a Self::Value;
-}
-
-pub fn element<E: Element>(element: Dynamic<E>) -> BoundElement<E> {
-    BoundElement {
-        element: element,
-        listeners: Vec::new(),
-    }
-}
-
-pub struct Constant<A> {
-    value: A,
-}
-
-impl<A> Constant<A> {
-    pub fn new(value: A) -> Dynamic<A> {
-        Dynamic(Box::new(Constant { value: value }))
-    }
-}
-
-impl<A> DynamicInner for Constant<A> {
-    type Value = A;
-
-    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a Self::Value {
-        &self.value
-    }
-}
-
-impl<A: 'static> DynamicInner for ComponentReference<A> {
-    type Value = A;
-
-    fn get<'a>(&'a self, components: &'a Slab<Box<UnsafeAny>>) -> &'a Self::Value {
-        &unsafe { components[self.index].downcast_ref_unchecked() }
-    }
-}
-
-pub struct Map<A, F> {
-    dynamic: Dynamic<A>,
-    f: F,
-}
-
-impl<A, B, F> DynamicInner for Map<A, F> where F: Fn(&A) -> B {
-    type Value = B;
-
-    fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R {
-        self.dynamic.with(components, |value| cont(&(self.f)(value)))
-    }
-}
-
-pub struct Map2<A1, A2, F> {
-    dynamic1: Dynamic<A1>,
-    dynamic2: Dynamic<A2>,
-    f: F,
-}
-
-impl<A1, A2, B, F> DynamicInner for Map2<A1, A2, F> where F: Fn(&A1, &A2) -> B {
-    type Value = B;
-
-    fn with<'a, R, C: FnMut(&Self::Value) -> R>(&'a self, components: &'a Slab<Box<UnsafeAny>>, mut cont: C) -> R {
-        self.dynamic1.with(components, |value1| self.dynamic2.with(components, |value2| cont(&(self.f)(value1, value2))))
-    }
-}
-
-/* events */
-
-pub struct Context<C> {
-    phantom_data: PhantomData<C>,
-}
-
-impl<C> Context<C> {
-    pub fn fire<E>(event: E) where C: Fire<E> {
-        
-    }
-}
-
-pub trait Fire<E> {}
 
 /* ui */
 
@@ -334,11 +128,12 @@ pub struct UI {
 
     components: Slab<Box<UnsafeAny>>,
 
-    root: usize,
-    elements: Slab<Box<ElementDelegate>>,
-    parents: Slab<Option<usize>>,
-    children: Slab<Vec<usize>>,
+    root: ElementReference,
+    elements: Slab<Box<Element>>,
+    parents: Slab<Option<ElementReference>>,
+    children: Slab<Vec<ElementReference>>,
     layout: Slab<BoundingBox>,
+    listeners: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>, InputEvent)>>>,
 
     input_state: InputState,
 }
@@ -351,21 +146,25 @@ impl UI {
 
             components: Slab::new(),
 
-            root: 0,
+            root: ElementReference(0),
             elements: Slab::new(),
             parents: Slab::new(),
             children: Slab::new(),
             layout: Slab::new(),
+            listeners: Slab::new(),
 
             input_state: InputState::default(),
         };
+
+        let root = ui.element(Empty, &[]);
+        ui.root(root);
 
         ui
     }
 
     /* size */
 
-    pub fn get_size(&self) -> (f32, f32) {
+    pub fn size(&self) -> (f32, f32) {
         (self.width, self.height)
     }
 
@@ -377,33 +176,39 @@ impl UI {
 
     /* tree */
 
-    pub fn root<T>(&mut self, tree: T) where T: Into<Tree> {
-        let Tree(installer) = tree.into();
-        self.root = installer.install(self);
+    pub fn root(&mut self, element: ElementReference) {
+        self.root = element;
         self.layout();
     }
 
-    fn component<C: 'static>(&mut self, component: Box<C>) -> ComponentReference<C> {
-        let index = self.components.insert(component);
+    pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementReference]) -> ElementReference {
+        let element = ElementReference(self.elements.insert(Box::new(element)));
+        self.parents.insert(None);
+        let mut children_vec = Vec::new();
+        children_vec.extend_from_slice(children);
+        self.children.insert(children_vec);
+        for child in children {
+            self.parents[child.0] = Some(element);
+        }
+        self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
+        self.listeners.insert(None);
+        element
+    }
+
+    pub fn component<C: 'static>(&mut self, component: C) -> ComponentReference<C> {
+        let index = self.components.insert(Box::new(component));
         ComponentReference::new(index)
     }
 
-    fn element<E: 'static + ElementDelegate>(&mut self, element: Box<E>) -> usize {
-        let index = self.elements.insert(element);
-        self.parents.insert(None);
-        self.children.insert(Vec::new());
-        self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
-        index
-    }
-
-    fn add_child(&mut self, parent: usize, child: usize) {
-        self.parents[child] = Some(parent);
-        self.children[parent].push(child);
+    pub fn listen<C: 'static>(&mut self, element: ElementReference, listener: Listener<C, InputEvent>) {
+        self.listeners[element.0] = Some(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: InputEvent| {
+            (listener.callback)(unsafe { components[listener.component.index].downcast_mut_unchecked() }, event);
+        }));
     }
     
     /* event handling */
 
-    pub fn set_modifiers(&mut self, modifiers: KeyboardModifiers) {
+    pub fn modifiers(&mut self, modifiers: KeyboardModifiers) {
         self.input_state.modifiers = modifiers;
     }
 
@@ -450,7 +255,7 @@ impl UI {
                 //     Some(dragging)
                 // } else {
                     let position = self.input_state.mouse_drag_origin.unwrap_or(self.input_state.mouse_position);
-                    if self.layout[self.root].contains_point(position) {
+                    if self.layout[self.root.0].contains_point(position) {
                         Some(self.find_element(self.root, position))
                     } else {
                         None
@@ -467,10 +272,11 @@ impl UI {
         };
 
         while let Some(element) = handler {
-            if self.elements[element].handle(&mut self.components, ev) {
+            if let Some(ref callback) = self.listeners[element.0] {
+                callback(&mut self.components, ev);
                 break;
             } else {
-                handler = self.parents[element];
+                handler = self.parents[element.0];
             }
         }
 
@@ -517,9 +323,9 @@ impl UI {
         ui_response
     }
 
-    fn find_element(&self, parent: usize, point: Point) -> usize {
-        for child in self.children[parent].iter() {
-            if self.layout[*child].contains_point(point) {
+    fn find_element(&self, parent: ElementReference, point: Point) -> ElementReference {
+        for child in self.children[parent.0].iter() {
+            if self.layout[child.0].contains_point(point) {
                 return self.find_element(*child, point);
             }
         }
@@ -534,9 +340,9 @@ impl UI {
         list
     }
 
-    fn display_element(&self, element: usize, list: &mut DisplayList) {
-        self.elements[element].display(&self.components, self.layout[element], list);
-        for child in self.children[element].iter() {
+    fn display_element(&self, element: ElementReference, list: &mut DisplayList) {
+        self.elements[element.0].display(&Context { components: &self.components }, self.layout[element.0], list);
+        for child in self.children[element.0].iter() {
             self.display_element(*child, list);
         }
     }
@@ -549,16 +355,16 @@ impl UI {
         Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
-    fn child_delegate<'a>(components: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<usize>>, elements: &'a Slab<Box<ElementDelegate>>, index: usize) -> ChildDelegate<'a> {
+    fn child_delegate<'a>(components: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<ElementReference>>, elements: &'a Slab<Box<Element>>, reference: ElementReference) -> ChildDelegate<'a> {
         let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
-        let children_indices = &children[index];
+        let children_indices = &children[reference.0];
         child_delegates.reserve(children_indices.len());
         for child in children_indices {
             child_delegates.push(Self::child_delegate(components, children, elements, *child));
         }
         ChildDelegate {
-            index: index,
-            element: &*elements[index],
+            reference: reference,
+            element: &*elements[reference.0],
             components: components,
             bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
             children: child_delegates,
@@ -567,8 +373,8 @@ impl UI {
 
     fn commit_delegates(layout: &mut Slab<BoundingBox>, delegate: ChildDelegate, offset: Point) {
         let offset = offset + delegate.bounds.pos;
-        layout[delegate.index].pos = offset;
-        layout[delegate.index].size = delegate.bounds.size;
+        layout[delegate.reference.0].pos = offset;
+        layout[delegate.reference.0].size = delegate.bounds.size;
         for child in delegate.children {
             Self::commit_delegates(layout, child, offset);
         }
@@ -576,12 +382,17 @@ impl UI {
 }
 
 
+pub struct Empty;
+
+impl Element for Empty {}
+
+
 pub struct BackgroundColor {
     pub color: [f32; 4],
 }
 
 impl Element for BackgroundColor {
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
         list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
     }
 }
@@ -593,7 +404,7 @@ pub struct Container {
 }
 
 impl Element for Container {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let max_width = self.max_width.min(max_width);
         let max_height = self.max_height.min(max_height);
 
@@ -615,7 +426,7 @@ pub struct Padding {
 }
 
 impl Element for Padding {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -634,7 +445,7 @@ pub struct Row {
 }
 
 impl Element for Row {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -653,7 +464,7 @@ pub struct Column {
 }
 
 impl Element for Column {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
         for child in children {
@@ -672,16 +483,12 @@ pub struct TextStyle {
     pub scale: Scale,
 }
 
-pub struct Text<'a> {
-    pub text: &'a str,
-    pub style: &'a TextStyle,
+pub struct Text {
+    pub text: String,
+    pub style: TextStyle,
 }
 
-impl<'a> Text<'a> {
-    // fn new(text: Dynamic<str>, style: Dynamic<TextStyle>) -> Tree {
-    //     element(Dynamic::map2(text, style, |text, style| Text { text: text, style: style })).into()
-    // }
-
+impl Text {
     fn layout_text(&self, x: f32, y: f32, max_width: f32, max_height: f32) -> (Vec<PositionedGlyph<'static>>, (f32, f32)) {
         use unicode_normalization::UnicodeNormalization;
 
@@ -730,13 +537,13 @@ impl<'a> Text<'a> {
     }
 }
 
-impl<'a> Element for Text<'a> {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+impl Element for Text {
+    fn layout<'a>(&self, ctx: &Context<'a>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let (_, (width, height)) = self.layout_text(0.0, 0.0, max_width, max_height);
         (width, height)
     }
 
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display<'a>(&self, ctx: &Context<'a>, bounds: BoundingBox, list: &mut DisplayList) {
         let (glyphs, _) = self.layout_text(bounds.pos.x, bounds.pos.y, bounds.size.x, bounds.size.y);
         for glyph in glyphs.iter() {
             list.glyph(glyph.standalone());
@@ -745,34 +552,34 @@ impl<'a> Element for Text<'a> {
 }
 
 
-//         let mut color = [0.15, 0.18, 0.23, 1.0];
-//         if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
-//             if bounds.contains_point(mouse_drag_origin) {
-//                 color = [0.02, 0.2, 0.6, 1.0];
-//             }
-//         } else if bounds.contains_point(input_state.mouse_position) {
-//             color = [0.3, 0.4, 0.5, 1.0];
-//         }
+// //         let mut color = [0.15, 0.18, 0.23, 1.0];
+// //         if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
+// //             if bounds.contains_point(mouse_drag_origin) {
+// //                 color = [0.02, 0.2, 0.6, 1.0];
+// //             }
+// //         } else if bounds.contains_point(input_state.mouse_position) {
+// //             color = [0.3, 0.4, 0.5, 1.0];
+// //         }
 
-pub struct Button {
-    hover: bool,
-}
+// pub struct Button {
+//     hover: bool,
+// }
 
-impl Button {
-    pub fn new(child: Tree) -> Component<Button> {
-        component(Button { hover: false }, |cmp| {
-            element(cmp.map(|button| {
-                BackgroundColor {
-                    color: if button.hover { [0.3, 0.4, 0.5, 1.0] } else { [0.15, 0.18, 0.23, 1.0] }
-                }
-            })).on(cmp, |cmp, ev, ctx| {
-                if let InputEvent::MousePress { button: MouseButton::Left } = ev {
-                    cmp.hover = !cmp.hover;
-                }
-            }).children(vec![child]).into()
-        })
-    }
-}
+// impl Button {
+//     pub fn new(child: Tree) -> Component<Button> {
+//         component(Button { hover: false }, |cmp| {
+//             element(cmp.map(|button| {
+//                 BackgroundColor {
+//                     color: if button.hover { [0.3, 0.4, 0.5, 1.0] } else { [0.15, 0.18, 0.23, 1.0] }
+//                 }
+//             })).on(cmp, |cmp, ev, ctx| {
+//                 if let InputEvent::MousePress { button: MouseButton::Left } = ev {
+//                     cmp.hover = !cmp.hover;
+//                 }
+//             }).children(vec![child]).into()
+//         })
+//     }
+// }
 
 
 // pub struct Stack;
