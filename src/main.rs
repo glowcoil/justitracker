@@ -85,9 +85,14 @@ fn main() {
     let text = ui.element(Text { text: "test".to_string(), style: TextStyle { font: font, scale: Scale::uniform(14.0) } }, &[]);
     let padding = ui.property(10.0);
     let p = ui.element(Padding { padding: padding.reference() }, &[text]);
-    let cmp = ui.component(0i32);
-    let color = ui.property([1.0, 0.0, 0.0, 1.0]);
-    let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], Listener::new(cmp, |cmp, event| { *cmp += 1; println!("{}", cmp); }));
+    let color = ui.property([0.15, 0.18, 0.23, 1.0]);
+    let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], Listener::new(move |ctx, event| {
+        if let ElementEvent::MouseEnter = event {
+            ctx.set(color, [0.02, 0.2, 0.6, 1.0]);
+        } else if let ElementEvent::MouseLeave = event {
+            ctx.set(color, [0.15, 0.18, 0.23, 1.0]);
+        }
+    }));
     ui.root(root);
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
@@ -112,7 +117,7 @@ fn main() {
                     None
                 }
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
-                    Some(InputEvent::CursorMoved { position: Point { x: x as f32, y: y as f32 } })
+                    Some(InputEvent::MouseMove(Point { x: x as f32, y: y as f32 }))
                 }
                 glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
                     ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
@@ -127,10 +132,10 @@ fn main() {
                     if let Some(button) = button {
                         match state {
                             glutin::ElementState::Pressed => {
-                                Some(InputEvent::MousePress { button: button })
+                                Some(InputEvent::MousePress(button))
                             }
                             glutin::ElementState::Released => {
-                                Some(InputEvent::MouseRelease { button: button })
+                                Some(InputEvent::MouseRelease(button))
                             }
                         }
                     } else {
@@ -145,10 +150,10 @@ fn main() {
 
                         match input.state {
                             glutin::ElementState::Pressed => {
-                                Some(InputEvent::KeyPress { button: button })
+                                Some(InputEvent::KeyPress(button))
                             }
                             glutin::ElementState::Released => {
-                                Some(InputEvent::KeyRelease { button: button })
+                                Some(InputEvent::KeyRelease(button))
                             }
                         }
                     } else {
@@ -156,7 +161,7 @@ fn main() {
                     }
                 }
                 glutin::WindowEvent::ReceivedCharacter(c) => {
-                    Some(InputEvent::TextInput { character: c })
+                    Some(InputEvent::TextInput(c))
                 }
                 _ => None,
             },

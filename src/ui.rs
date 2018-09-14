@@ -22,7 +22,7 @@ use render::*;
 
 /* references */
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct ElementReference(usize);
 
 macro_rules! reference {
@@ -133,17 +133,19 @@ impl<'a> ContextMut<'a> {
     }
 }
 
-pub struct Listener<C, E> {
-    component: ComponentReference<C>,
-    callback: Box<Fn(&mut C, E)>,
-}
+pub struct Listener<E>(Box<Fn(&Slab<Box<UnsafeAny>>, &mut ContextMut, E)>);
 
-impl<C, E> Listener<C, E> {
-    pub fn new<F: Fn(&mut C, E) + 'static>(component: ComponentReference<C>, callback: F) -> Listener<C, E> {
-        Listener {
-            component: component,
-            callback: Box::new(callback),
-        }
+impl<E> Listener<E> {
+    pub fn new<F: Fn(&mut ContextMut, E) + 'static>(callback: F) -> Listener<E> {
+        Listener(Box::new(move |_, context, event| {
+            callback(context, event)
+        }))
+    }
+
+    pub fn component<C: 'static, F: Fn(&C, &mut ContextMut, E) + 'static>(component: ComponentReference<C>, callback: F) -> Listener<E> {
+        Listener(Box::new(move |components, context, event| {
+            callback(unsafe { components[component.index].downcast_ref_unchecked() }, context, event)
+        }))
     }
 }
 
@@ -161,7 +163,9 @@ pub struct UI {
     parents: Slab<Option<ElementReference>>,
     children: Slab<Vec<ElementReference>>,
     layout: Slab<BoundingBox>,
-    listeners: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>, InputEvent)>>>,
+    listeners: Slab<Option<Listener<ElementEvent>>>,
+
+    under_cursor: Option<ElementReference>,
 
     input_state: InputState,
 }
@@ -181,6 +185,8 @@ impl UI {
             children: Slab::new(),
             layout: Slab::new(),
             listeners: Slab::new(),
+
+            under_cursor: None,
 
             input_state: InputState::default(),
         };
@@ -224,11 +230,9 @@ impl UI {
         element
     }
 
-    pub fn element_with_listener<E: Element + 'static, C: 'static>(&mut self, element: E, children: &[ElementReference], listener: Listener<C, InputEvent>) -> ElementReference {
+    pub fn element_with_listener<E: Element + 'static>(&mut self, element: E, children: &[ElementReference], listener: Listener<ElementEvent>) -> ElementReference {
         let element = self.element(element, children);
-        self.listeners[element.0] = Some(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: InputEvent| {
-            (listener.callback)(unsafe { components[listener.component.index].downcast_mut_unchecked() }, event);
-        }));
+        self.listeners[element.0] = Some(listener);
         element
     }
 
@@ -248,12 +252,12 @@ impl UI {
         self.input_state.modifiers = modifiers;
     }
 
-    pub fn input(&mut self, ev: InputEvent) -> UIEventResponse {
-        match ev {
-            InputEvent::CursorMoved { position } => {
+    pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
+        match event {
+            InputEvent::MouseMove(position) => {
                 self.input_state.mouse_position = position;
             }
-            InputEvent::MousePress { button } => {
+            InputEvent::MousePress(button) => {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = true;
@@ -267,7 +271,7 @@ impl UI {
                     }
                 }
             }
-            InputEvent::MouseRelease { button } => {
+            InputEvent::MouseRelease(button) => {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = false;
@@ -285,20 +289,22 @@ impl UI {
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let mut handler = match ev {
-            InputEvent::CursorMoved { .. } | InputEvent::MousePress { .. } | InputEvent::MouseRelease { .. } | InputEvent::MouseScroll { .. } => {
+        let mut under_cursor = None;
+        let mut handler = match event {
+            InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
                 // if let Some(dragging) = self.dragging {
                 //     Some(dragging)
                 // } else {
                     let position = self.input_state.mouse_drag_origin.unwrap_or(self.input_state.mouse_position);
-                    if self.layout[self.root.0].contains_point(position) {
+                    under_cursor = if self.layout[self.root.0].contains_point(position) {
                         Some(self.find_element(self.root, position))
                     } else {
                         None
-                    }
+                    };
+                    under_cursor
                 // }
             },
-            InputEvent::KeyPress { .. } | InputEvent::KeyRelease { .. } | InputEvent::TextInput { .. } => {
+            InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
                 // self.focus.or(Some(self.root))
                 Some(self.root)
             }
@@ -307,13 +313,14 @@ impl UI {
             }
         };
 
-        while let Some(element) = handler {
-            if let Some(ref callback) = self.listeners[element.0] {
-                callback(&mut self.components, ev);
-                break;
-            } else {
-                handler = self.parents[element.0];
-            }
+        if under_cursor != self.under_cursor {
+            self.under_cursor.map(|old_under_cursor| self.fire_element_event(old_under_cursor, ElementEvent::MouseLeave));
+            under_cursor.map(|new_under_cursor| self.fire_element_event(new_under_cursor, ElementEvent::MouseEnter));
+            self.under_cursor = under_cursor;
+        }
+
+        if let Some(handler) = handler {
+            self.fire_element_event(handler, ElementEvent::from_input_event(event));
         }
 
         // if response.capture_keyboard {
@@ -339,8 +346,8 @@ impl UI {
         // }
         // ui_response.mouse_cursor = response.mouse_cursor;
 
-        match ev {
-            InputEvent::MouseRelease { button: MouseButton::Left } => {
+        match event {
+            InputEvent::MouseRelease(MouseButton::Left) => {
                 // if self.mouse_position_captured {
                 //     if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
                 //         self.input_state.mouse_position = mouse_drag_origin;
@@ -366,6 +373,18 @@ impl UI {
             }
         }
         parent
+    }
+
+    fn fire_element_event(&mut self, element: ElementReference, event: ElementEvent) {
+        let mut handler = Some(element);
+        while let Some(element) = handler {
+            if let Some(Listener(ref callback)) = self.listeners[element.0] {
+                callback(&self.components, &mut ContextMut { properties: &mut self.properties }, event);
+                break;
+            } else {
+                handler = self.parents[element.0];
+            }
+        }
     }
 
     /* display */
@@ -855,13 +874,40 @@ impl Element for Text {
 
 #[derive(Copy, Clone, Debug)]
 pub enum InputEvent {
-    CursorMoved { position: Point },
-    MousePress { button: MouseButton },
-    MouseRelease { button: MouseButton },
-    MouseScroll { delta: f32 },
-    KeyPress { button: KeyboardButton },
-    KeyRelease { button: KeyboardButton },
-    TextInput { character: char },
+    MouseMove(Point),
+    MousePress(MouseButton),
+    MouseRelease(MouseButton),
+    MouseScroll(f32),
+    KeyPress(KeyboardButton),
+    KeyRelease(KeyboardButton),
+    TextInput(char),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ElementEvent {
+    MouseEnter,
+    MouseLeave,
+    MouseMove(Point),
+    MousePress(MouseButton),
+    MouseRelease(MouseButton),
+    MouseScroll(f32),
+    KeyPress(KeyboardButton),
+    KeyRelease(KeyboardButton),
+    TextInput(char),
+}
+
+impl ElementEvent {
+    fn from_input_event(event: InputEvent) -> ElementEvent {
+        match event {
+            InputEvent::MouseMove(Point) => ElementEvent::MouseMove(Point),
+            InputEvent::MousePress(MouseButton) => ElementEvent::MousePress(MouseButton),
+            InputEvent::MouseRelease(MouseButton) => ElementEvent::MouseRelease(MouseButton),
+            InputEvent::MouseScroll(f32) => ElementEvent::MouseScroll(f32),
+            InputEvent::KeyPress(KeyboardButton) => ElementEvent::KeyPress(KeyboardButton),
+            InputEvent::KeyRelease(KeyboardButton) => ElementEvent::KeyRelease(KeyboardButton),
+            InputEvent::TextInput(char) => ElementEvent::TextInput(char),
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
