@@ -25,36 +25,46 @@ use render::*;
 #[derive(Copy, Clone)]
 pub struct ElementReference(usize);
 
-pub struct ComponentReference<C> {
-    index: usize,
-    phantom_data: PhantomData<*const C>,
-}
+macro_rules! reference {
+    ($type:ident) => {
+        pub struct $type<A> {
+            index: usize,
+            phantom_data: PhantomData<*const A>,
+        }
 
-impl<C> Clone for ComponentReference<C> {
-    fn clone(&self) -> ComponentReference<C> {
-        ComponentReference {
-            index: self.index,
-            phantom_data: PhantomData,
+        impl<A> Clone for $type<A> {
+            fn clone(&self) -> $type<A> {
+                $type {
+                    index: self.index,
+                    phantom_data: PhantomData,
+                }
+            }
+        }
+
+        impl<A> Copy for $type<A> {}
+
+        impl<A> $type<A> {
+            fn new(index: usize) -> $type<A> {
+                $type {
+                    index: index,
+                    phantom_data: PhantomData,
+                }
+            }
         }
     }
 }
 
-impl<C> Copy for ComponentReference<C> {}
+reference! { ComponentReference }
 
-impl<C> ComponentReference<C> {
-    fn new(index: usize) -> ComponentReference<C> {
-        ComponentReference {
-            index: index,
-            phantom_data: PhantomData,
-        }
-    }
+reference! { Property }
 
-    pub fn reference(&self) -> Reference<C> {
-        Reference(*self)
+impl<A> Property<A> {
+    pub fn reference(&self) -> Reference<A> {
+        Reference::new(self.index)
     }
 }
 
-pub struct Reference<A: 'static>(ComponentReference<A>);
+reference! { Reference }
 
 /* element */
 
@@ -76,14 +86,14 @@ pub trait Element {
 pub struct ChildDelegate<'a> {
     reference: ElementReference,
     element: &'a Element,
-    components: &'a Slab<Box<UnsafeAny>>,
+    properties: &'a Slab<Box<UnsafeAny>>,
     bounds: BoundingBox,
     children: Vec<ChildDelegate<'a>>,
 }
 
 impl<'a> ChildDelegate<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        let (width, height) = self.element.layout(&Context { components: self.components }, max_width, max_height, &mut self.children);
+        let (width, height) = self.element.layout(&Context { properties: self.properties }, max_width, max_height, &mut self.children);
         self.bounds.size.x = width;
         self.bounds.size.y = height;
         (width, height)
@@ -96,13 +106,30 @@ impl<'a> ChildDelegate<'a> {
 }
 
 pub struct Context<'a> {
-    components: &'a Slab<Box<UnsafeAny>>,
+    properties: &'a Slab<Box<UnsafeAny>>,
 }
 
 impl<'a> Context<'a> {
-    pub fn get<A>(&self, reference: Reference<A>) -> &'a A {
-        let Reference(component_reference) = reference;
-        &*unsafe { self.components[component_reference.index].downcast_ref_unchecked() }
+    pub fn get<A: 'static>(&self, reference: Reference<A>) -> &'a A {
+        &*unsafe { self.properties[reference.index].downcast_ref_unchecked() }
+    }
+}
+
+pub struct ContextMut<'a> {
+    properties: &'a mut Slab<Box<UnsafeAny>>,
+}
+
+impl<'a> ContextMut<'a> {
+    pub fn get<'b, A: 'static>(&'b self, property: Property<A>) -> &'b A {
+        &*unsafe { self.properties[property.index].downcast_ref_unchecked() }
+    }
+
+    pub fn get_mut<'b, A: 'static>(&'b mut self, property: Property<A>) -> &'b mut A {
+        &mut *unsafe { self.properties[property.index].downcast_mut_unchecked() }
+    }
+
+    pub fn set<A: 'static>(&mut self, property: Property<A>, value: A) {
+        self.properties[property.index] = Box::new(value);
     }
 }
 
@@ -127,6 +154,7 @@ pub struct UI {
     height: f32,
 
     components: Slab<Box<UnsafeAny>>,
+    properties: Slab<Box<UnsafeAny>>,
 
     root: ElementReference,
     elements: Slab<Box<Element>>,
@@ -145,6 +173,7 @@ impl UI {
             height: height,
 
             components: Slab::new(),
+            properties: Slab::new(),
 
             root: ElementReference(0),
             elements: Slab::new(),
@@ -195,15 +224,22 @@ impl UI {
         element
     }
 
+    pub fn element_with_listener<E: Element + 'static, C: 'static>(&mut self, element: E, children: &[ElementReference], listener: Listener<C, InputEvent>) -> ElementReference {
+        let element = self.element(element, children);
+        self.listeners[element.0] = Some(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: InputEvent| {
+            (listener.callback)(unsafe { components[listener.component.index].downcast_mut_unchecked() }, event);
+        }));
+        element
+    }
+
     pub fn component<C: 'static>(&mut self, component: C) -> ComponentReference<C> {
         let index = self.components.insert(Box::new(component));
         ComponentReference::new(index)
     }
 
-    pub fn listen<C: 'static>(&mut self, element: ElementReference, listener: Listener<C, InputEvent>) {
-        self.listeners[element.0] = Some(Box::new(move |components: &mut Slab<Box<UnsafeAny>>, event: InputEvent| {
-            (listener.callback)(unsafe { components[listener.component.index].downcast_mut_unchecked() }, event);
-        }));
+    pub fn property<A: 'static>(&mut self, value: A) -> Property<A> {
+        let index = self.properties.insert(Box::new(value));
+        Property::new(index)
     }
     
     /* event handling */
@@ -341,7 +377,7 @@ impl UI {
     }
 
     fn display_element(&self, element: ElementReference, list: &mut DisplayList) {
-        self.elements[element.0].display(&Context { components: &self.components }, self.layout[element.0], list);
+        self.elements[element.0].display(&Context { properties: &self.properties }, self.layout[element.0], list);
         for child in self.children[element.0].iter() {
             self.display_element(*child, list);
         }
@@ -350,22 +386,22 @@ impl UI {
     /* layout */
 
     fn layout(&mut self) {
-        let mut root = Self::child_delegate(&self.components, &self.children, &self.elements, self.root);
+        let mut root = Self::child_delegate(&self.properties, &self.children, &self.elements, self.root);
         let (width, height) = root.layout(self.width, self.height);
         Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
-    fn child_delegate<'a>(components: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<ElementReference>>, elements: &'a Slab<Box<Element>>, reference: ElementReference) -> ChildDelegate<'a> {
+    fn child_delegate<'a>(properties: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<ElementReference>>, elements: &'a Slab<Box<Element>>, reference: ElementReference) -> ChildDelegate<'a> {
         let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
         let children_indices = &children[reference.0];
         child_delegates.reserve(children_indices.len());
         for child in children_indices {
-            child_delegates.push(Self::child_delegate(components, children, elements, *child));
+            child_delegates.push(Self::child_delegate(properties, children, elements, *child));
         }
         ChildDelegate {
             reference: reference,
             element: &*elements[reference.0],
-            components: components,
+            properties: properties,
             bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
             children: child_delegates,
         }
@@ -388,25 +424,25 @@ impl Element for Empty {}
 
 
 pub struct BackgroundColor {
-    pub color: [f32; 4],
+    pub color: Reference<[f32; 4]>,
 }
 
 impl Element for BackgroundColor {
     fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *ctx.get(self.color) });
     }
 }
 
 
 pub struct Container {
-    max_width: f32,
-    max_height: f32,
+    max_size: Reference<(f32, f32)>,
 }
 
 impl Element for Container {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let max_width = self.max_width.min(max_width);
-        let max_height = self.max_height.min(max_height);
+        let (self_max_width, self_max_height) = *ctx.get(self.max_size);
+        let max_width = self_max_width.min(max_width);
+        let max_height = self_max_height.min(max_height);
 
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -422,39 +458,41 @@ impl Element for Container {
 
 
 pub struct Padding {
-    pub padding: f32,
+    pub padding: Reference<f32>,
 }
 
 impl Element for Padding {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let padding = *ctx.get(self.padding);
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
-            let (child_width, child_height) = child.layout(max_width - 2.0 * self.padding, max_height - 2.0 * self.padding);
+            let (child_width, child_height) = child.layout(max_width - 2.0 * padding, max_height - 2.0 * padding);
             width = width.max(child_width);
             height = height.max(child_height);
-            child.offset(self.padding, self.padding);
+            child.offset(padding, padding);
         }
-        (width + 2.0 * self.padding, height + 2.0 * self.padding)
+        (width + 2.0 * padding, height + 2.0 * padding)
     }
 }
 
 
 pub struct Row {
-    pub spacing: f32,
+    pub spacing: Reference<f32>,
 }
 
 impl Element for Row {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let spacing = *ctx.get(self.spacing);
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
             let (child_width, child_height) = child.layout(max_width - x, max_height);
             child.offset(x, 0.0);
-            x += child_width + self.spacing;
+            x += child_width + spacing;
             height = height.max(child_height);
         }
-        (x - self.spacing, height)
+        (x - spacing, height)
     }
 }
 
@@ -561,9 +599,7 @@ impl Element for Text {
 // //             color = [0.3, 0.4, 0.5, 1.0];
 // //         }
 
-// pub struct Button {
-//     hover: bool,
-// }
+// pub struct Button;
 
 // impl Button {
 //     pub fn new(child: Tree) -> Component<Button> {

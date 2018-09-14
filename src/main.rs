@@ -83,10 +83,11 @@ fn main() {
     let font = Rc::new(collection.into_font().unwrap());
 
     let text = ui.element(Text { text: "test".to_string(), style: TextStyle { font: font, scale: Scale::uniform(14.0) } }, &[]);
-    let padding = ui.element(Padding { padding: 10.0 }, &[text]);
-    let root = ui.element(BackgroundColor { color: [1.0, 0.0, 0.0, 1.0] }, &[padding]);
+    let padding = ui.property(10.0);
+    let p = ui.element(Padding { padding: padding.reference() }, &[text]);
     let cmp = ui.component(0i32);
-    ui.listen(root, Listener::new(cmp, |cmp, event| { *cmp += 1; println!("{}", cmp); }));
+    let color = ui.property([1.0, 0.0, 0.0, 1.0]);
+    let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], Listener::new(cmp, |cmp, event| { *cmp += 1; println!("{}", cmp); }));
     ui.root(root);
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
