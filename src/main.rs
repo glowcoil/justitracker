@@ -93,7 +93,7 @@ fn main() {
     }
     let state = ui.property(ButtonState::Up);
     let color = ui.property([0.15, 0.18, 0.23, 1.0]);
-    let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], Listener::new(move |ctx, event| {
+    let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], move |ctx, event| {
         match event {
             ElementEvent::MouseEnter => {
                 ctx.set(state, ButtonState::Hover);
@@ -115,7 +115,7 @@ fn main() {
             }
             _ => {}
         }
-    }));
+    });
     ui.root(root);
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));

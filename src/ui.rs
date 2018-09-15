@@ -131,16 +131,6 @@ impl<'a> ContextMut<'a> {
     }
 }
 
-pub struct Listener<E>(Box<Fn(&mut ContextMut, E)>);
-
-impl<E> Listener<E> {
-    pub fn new<F: Fn(&mut ContextMut, E) + 'static>(callback: F) -> Listener<E> {
-        Listener(Box::new(move |context, event| {
-            callback(context, event)
-        }))
-    }
-}
-
 /* ui */
 
 pub struct UI {
@@ -154,7 +144,7 @@ pub struct UI {
     parents: Slab<Option<ElementReference>>,
     children: Slab<Vec<ElementReference>>,
     layout: Slab<BoundingBox>,
-    listeners: Slab<Option<Listener<ElementEvent>>>,
+    listeners: Slab<Option<Box<Fn(&mut ContextMut, ElementEvent)>>>,
 
     under_cursor: Vec<ElementReference>,
 
@@ -220,9 +210,9 @@ impl UI {
         element
     }
 
-    pub fn element_with_listener<E: Element + 'static>(&mut self, element: E, children: &[ElementReference], listener: Listener<ElementEvent>) -> ElementReference {
+    pub fn element_with_listener<E: Element + 'static, F: Fn(&mut ContextMut, ElementEvent) + 'static>(&mut self, element: E, children: &[ElementReference], listener: F) -> ElementReference {
         let element = self.element(element, children);
-        self.listeners[element.0] = Some(listener);
+        self.listeners[element.0] = Some(Box::new(listener));
         element
     }
 
@@ -393,7 +383,7 @@ impl UI {
     }
 
     fn fire_event(&mut self, element: ElementReference, event: ElementEvent) -> bool {
-        if let Some(Listener(ref callback)) = self.listeners[element.0] {
+        if let Some(ref callback) = self.listeners[element.0] {
             callback(&mut ContextMut { properties: &mut self.properties }, event);
             true
         } else {
