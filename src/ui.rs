@@ -463,7 +463,7 @@ impl BackgroundColor {
         BackgroundColor { color: color }
     }
 
-    pub fn install(self, child: ElementReference, ui: &mut UI) -> ElementReference {
+    pub fn install(self, ui: &mut UI, child: ElementReference) -> ElementReference {
         ui.element(self, &[child])
     }
 }
@@ -484,7 +484,7 @@ impl Container {
         Container { max_size: max_size }
     }
 
-    pub fn install(self, child: ElementReference, ui: &mut UI) -> ElementReference {
+    pub fn install(self, ui: &mut UI, child: ElementReference) -> ElementReference {
         ui.element(self, &[child])
     }
 }
@@ -509,7 +509,17 @@ impl Element for Container {
 
 
 pub struct Padding {
-    pub padding: Reference<f32>,
+    padding: Reference<f32>,
+}
+
+impl Padding {
+    pub fn new(padding: Reference<f32>) -> Padding {
+        Padding { padding: padding }
+    }
+
+    pub fn install(self, ui: &mut UI, child: ElementReference) -> ElementReference {
+        ui.element(self, &[child])
+    }
 }
 
 impl Element for Padding {
@@ -529,7 +539,17 @@ impl Element for Padding {
 
 
 pub struct Row {
-    pub spacing: Reference<f32>,
+    spacing: Reference<f32>,
+}
+
+impl Row {
+    pub fn new(spacing: Reference<f32>) -> Row {
+        Row { spacing: spacing }
+    }
+
+    pub fn install(self, ui: &mut UI, children: &[ElementReference]) -> ElementReference {
+        ui.element(self, children)
+    }
 }
 
 impl Element for Row {
@@ -549,20 +569,31 @@ impl Element for Row {
 
 
 pub struct Column {
-    pub spacing: f32,
+    spacing: Reference<f32>,
+}
+
+impl Column {
+    pub fn new(spacing: Reference<f32>) -> Column {
+        Column { spacing: spacing }
+    }
+
+    pub fn install(self, ui: &mut UI, children: &[ElementReference]) -> ElementReference {
+        ui.element(self, children)
+    }
 }
 
 impl Element for Column {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let spacing = *ctx.get(self.spacing);
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
         for child in children {
             let (child_width, child_height) = child.layout(max_width, max_height - y);
             child.offset(0.0, y);
             width = width.max(child_width);
-            y += child_height + self.spacing;
+            y += child_height + spacing;
         }
-        (width, y - self.spacing)
+        (width, y - spacing)
     }
 }
 
@@ -653,32 +684,66 @@ impl Element for Text {
 }
 
 
-// //         let mut color = [0.15, 0.18, 0.23, 1.0];
-// //         if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
-// //             if bounds.contains_point(mouse_drag_origin) {
-// //                 color = [0.02, 0.2, 0.6, 1.0];
-// //             }
-// //         } else if bounds.contains_point(input_state.mouse_position) {
-// //             color = [0.3, 0.4, 0.5, 1.0];
-// //         }
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum ButtonState {
+    Up,
+    Hover,
+    Down,
+}
 
-// pub struct Button;
+pub struct Button {
+    text: Reference<String>,
+    style: Reference<TextStyle>,
+    on_click: Option<Box<Fn(&mut ContextMut)>>,
+}
 
-// impl Button {
-//     pub fn new(child: Tree) -> Component<Button> {
-//         component(Button { hover: false }, |cmp| {
-//             element(cmp.map(|button| {
-//                 BackgroundColor {
-//                     color: if button.hover { [0.3, 0.4, 0.5, 1.0] } else { [0.15, 0.18, 0.23, 1.0] }
-//                 }
-//             })).on(cmp, |cmp, ev, ctx| {
-//                 if let InputEvent::MousePress { button: MouseButton::Left } = ev {
-//                     cmp.hover = !cmp.hover;
-//                 }
-//             }).children(vec![child]).into()
-//         })
-//     }
-// }
+impl Button {
+    pub fn with_text(text: Reference<String>, style: Reference<TextStyle>) -> Button {
+        Button { text: text, style: style, on_click: None }
+    }
+
+    pub fn on_click<F: Fn(&mut ContextMut) + 'static>(mut self, on_click: F) -> Button {
+        self.on_click = Some(Box::new(on_click));
+        self
+    }
+
+    pub fn install(self, ui: &mut UI) -> ElementReference {
+        let state = ui.property(ButtonState::Up);
+        let color = ui.property([0.15, 0.18, 0.23, 1.0]);
+
+        let text = Text::new(self.text, self.style).install(ui);
+        let padding = ui.property(10.0);
+        let padding = Padding::new(padding.reference()).install(ui, text);
+        let button = BackgroundColor::new(color.reference()).install(ui, padding);
+        ui.listen(button, move |ctx, event| {
+            match event {
+                ElementEvent::MouseEnter => {
+                    ctx.set(state, ButtonState::Hover);
+                    ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
+                }
+                ElementEvent::MouseLeave => {
+                    ctx.set(state, ButtonState::Up);
+                    ctx.set(color, [0.15, 0.18, 0.23, 1.0])
+                }
+                ElementEvent::MousePress(MouseButton::Left) => {
+                    ctx.set(state, ButtonState::Down);
+                    ctx.set(color, [0.02, 0.2, 0.6, 1.0]);
+                }
+                ElementEvent::MouseRelease(MouseButton::Left) => {
+                    if *ctx.get(state) == ButtonState::Down {
+                        ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
+                        if let Some(ref on_click) = self.on_click {
+                            on_click(ctx);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        });
+
+        button
+    }
+}
 
 
 // pub struct Stack;
@@ -810,46 +875,6 @@ impl Element for Text {
 //     None,
 //     Equal,
 //     Ratio(Vec<f32>),
-// }
-
-
-// pub struct Button;
-
-// impl Button {
-//     pub fn install(mut ctx: Context<Button>) -> Button {
-//         let id = ctx.get_self();
-//         ctx.register_slot(id);
-
-//         ctx.listen(id, Button::handle);
-
-//         Button
-//     }
-
-//     fn handle(&mut self, mut ctx: Context<Button>, evt: InputEvent) {
-//         if let InputEvent::MouseRelease { button: MouseButton::Left } = evt {
-//             ctx.fire(ClickEvent);
-//         }
-//     }
-// }
-
-// #[derive(Copy, Clone)]
-// pub struct ClickEvent;
-
-// impl Element for Button {
-//     fn display(&self, resources: &Resources, bounds: BoundingBox, input_state: InputState, list: &mut DisplayList) {
-//         let box_style = resources.get_style::<BoxStyle>();
-
-//         let mut color = [0.15, 0.18, 0.23, 1.0];
-//         if let Some(mouse_drag_origin) = input_state.mouse_drag_origin {
-//             if bounds.contains_point(mouse_drag_origin) {
-//                 color = [0.02, 0.2, 0.6, 1.0];
-//             }
-//         } else if bounds.contains_point(input_state.mouse_position) {
-//             color = [0.3, 0.4, 0.5, 1.0];
-//         }
-
-//         list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: color });
-//     }
 // }
 
 

@@ -84,42 +84,24 @@ fn main() {
 
     let style = ui.property(TextStyle { font: font, scale: Scale::uniform(14.0) });
     let text = ui.property("test".to_string());
-    let text = Text::new(text.reference(), style.reference()).install(&mut ui);
-    let padding = ui.property(10.0);
-    let p = ui.element(Padding { padding: padding.reference() }, &[text]);
-    #[derive(Copy, Clone, Eq, PartialEq)]
-    enum ButtonState {
-        Up,
-        Hover,
-        Down,
-    }
-    let state = ui.property(ButtonState::Up);
-    let color = ui.property([0.15, 0.18, 0.23, 1.0]);
-    let root = BackgroundColor::new(color.reference()).install(p, &mut ui);
-    ui.listen(root, move |ctx, event| {
-        match event {
-            ElementEvent::MouseEnter => {
-                ctx.set(state, ButtonState::Hover);
-                ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
-            }
-            ElementEvent::MouseLeave => {
-                ctx.set(state, ButtonState::Up);
-                ctx.set(color, [0.15, 0.18, 0.23, 1.0])
-            }
-            ElementEvent::MousePress(MouseButton::Left) => {
-                ctx.set(state, ButtonState::Down);
-                ctx.set(color, [0.02, 0.2, 0.6, 1.0]);
-            }
-            ElementEvent::MouseRelease(MouseButton::Left) => {
-                if *ctx.get(state) == ButtonState::Down {
-                    ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
-                    println!("click!");
-                }
-            }
-            _ => {}
-        }
-    });
-    ui.root(root);
+
+    let button = Button::with_text(text.reference(), style.reference())
+        .on_click(|_| println!("click!"))
+        .install(&mut ui);
+    let button2 = Button::with_text(text.reference(), style.reference()).install(&mut ui);
+
+    let text2 = ui.property("hello".to_string());
+    let text2 = Text::new(text2.reference(), style.reference()).install(&mut ui);
+
+    let padding = ui.property(5.0);
+    let col = Column::new(padding.reference()).install(&mut ui, &[button, button2, text2]);
+
+    let text3 = ui.property("hi hi hi hi hi".to_string());
+    let text3 = Text::new(text3.reference(), style.reference()).install(&mut ui);
+
+    let row = Row::new(padding.reference()).install(&mut ui, &[col, text3]);
+
+    ui.root(row);
 
     // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
     // // ui.set_global_style::<StackStyle>(StackStyle::grow(Grow::Equal).spacing(5.0));
