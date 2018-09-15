@@ -165,7 +165,7 @@ pub struct UI {
     layout: Slab<BoundingBox>,
     listeners: Slab<Option<Listener<ElementEvent>>>,
 
-    under_cursor: Option<ElementReference>,
+    under_cursor: Vec<ElementReference>,
 
     input_state: InputState,
 }
@@ -186,7 +186,7 @@ impl UI {
             layout: Slab::new(),
             listeners: Slab::new(),
 
-            under_cursor: None,
+            under_cursor: Vec::new(),
 
             input_state: InputState::default(),
         };
@@ -245,7 +245,7 @@ impl UI {
         let index = self.properties.insert(Box::new(value));
         Property::new(index)
     }
-    
+
     /* event handling */
 
     pub fn modifiers(&mut self, modifiers: KeyboardModifiers) {
@@ -275,6 +275,7 @@ impl UI {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = false;
+                        self.input_state.mouse_drag_origin = None;
                     }
                     MouseButton::Middle => {
                         self.input_state.mouse_middle_pressed = false;
@@ -289,19 +290,54 @@ impl UI {
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let mut under_cursor = None;
         let mut handler = match event {
             InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
                 // if let Some(dragging) = self.dragging {
                 //     Some(dragging)
                 // } else {
                     let position = self.input_state.mouse_drag_origin.unwrap_or(self.input_state.mouse_position);
-                    under_cursor = if self.layout[self.root.0].contains_point(position) {
-                        Some(self.find_element(self.root, position))
+                    let mut i = 0;
+                    let handler = if self.layout[self.root.0].contains_point(position) {
+                        let mut element = self.root;
+                        loop {
+                            if i < self.under_cursor.len() {
+                                if element != self.under_cursor[i] {
+                                    let mut old_under_cursor = self.under_cursor.split_off(i);
+                                    for child in old_under_cursor {
+                                        self.fire_event(child, ElementEvent::MouseLeave);
+                                    }
+                                }
+                            }
+                            if i >= self.under_cursor.len() {
+                                self.under_cursor.push(element);
+                                self.fire_event(element, ElementEvent::MouseEnter);
+                            }
+                            i += 1;
+
+                            let mut found = false;
+                            for child in self.children[element.0].iter() {
+                                if self.layout[child.0].contains_point(position) {
+                                    element = *child;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                break;
+                            }
+                        }
+
+                        Some(element)
                     } else {
                         None
                     };
-                    under_cursor
+
+                    let mut old_under_cursor = self.under_cursor.split_off(i);
+                    for child in old_under_cursor {
+                        self.fire_event(child, ElementEvent::MouseLeave);
+                    }
+
+                    handler
                 // }
             },
             InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
@@ -313,14 +349,8 @@ impl UI {
             }
         };
 
-        if under_cursor != self.under_cursor {
-            self.under_cursor.map(|old_under_cursor| self.fire_element_event(old_under_cursor, ElementEvent::MouseLeave));
-            under_cursor.map(|new_under_cursor| self.fire_element_event(new_under_cursor, ElementEvent::MouseEnter));
-            self.under_cursor = under_cursor;
-        }
-
         if let Some(handler) = handler {
-            self.fire_element_event(handler, ElementEvent::from_input_event(event));
+            self.bubble_event(handler, ElementEvent::from_input_event(event));
         }
 
         // if response.capture_keyboard {
@@ -366,24 +396,23 @@ impl UI {
         ui_response
     }
 
-    fn find_element(&self, parent: ElementReference, point: Point) -> ElementReference {
-        for child in self.children[parent.0].iter() {
-            if self.layout[child.0].contains_point(point) {
-                return self.find_element(*child, point);
-            }
-        }
-        parent
-    }
-
-    fn fire_element_event(&mut self, element: ElementReference, event: ElementEvent) {
+    fn bubble_event(&mut self, element: ElementReference, event: ElementEvent) {
         let mut handler = Some(element);
         while let Some(element) = handler {
-            if let Some(Listener(ref callback)) = self.listeners[element.0] {
-                callback(&self.components, &mut ContextMut { properties: &mut self.properties }, event);
+            if self.fire_event(element, event) {
                 break;
             } else {
                 handler = self.parents[element.0];
             }
+        }
+    }
+
+    fn fire_event(&mut self, element: ElementReference, event: ElementEvent) -> bool {
+        if let Some(Listener(ref callback)) = self.listeners[element.0] {
+            callback(&self.components, &mut ContextMut { properties: &mut self.properties }, event);
+            true
+        } else {
+            false
         }
     }
 
