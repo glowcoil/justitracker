@@ -80,9 +80,11 @@ fn main() {
     let mut ui = UI::new(width as f32, height as f32);
 
     let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
-    let font = Rc::new(collection.into_font().unwrap());
+    let font = collection.into_font().unwrap();
 
-    let text = ui.element(Text { text: "test".to_string(), style: TextStyle { font: font, scale: Scale::uniform(14.0) } }, &[]);
+    let style = ui.property(TextStyle { font: font, scale: Scale::uniform(14.0) });
+    let text = ui.property("test".to_string());
+    let text = Text::new(text.reference(), style.reference()).install(&mut ui);
     let padding = ui.property(10.0);
     let p = ui.element(Padding { padding: padding.reference() }, &[text]);
     #[derive(Copy, Clone, Eq, PartialEq)]
@@ -93,7 +95,8 @@ fn main() {
     }
     let state = ui.property(ButtonState::Up);
     let color = ui.property([0.15, 0.18, 0.23, 1.0]);
-    let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], move |ctx, event| {
+    let root = BackgroundColor::new(color.reference()).install(p, &mut ui);
+    ui.listen(root, move |ctx, event| {
         match event {
             ElementEvent::MouseEnter => {
                 ctx.set(state, ButtonState::Hover);

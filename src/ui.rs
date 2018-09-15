@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::f32;
 
-use std::rc::Rc;
+use std::cell::RefCell;
 
 use slab::Slab;
 
@@ -67,7 +67,7 @@ reference! { Reference }
 /* element */
 
 pub trait Element {
-    fn layout<'a>(&self, context: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, context: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -78,7 +78,7 @@ pub trait Element {
         (width, height)
     }
 
-    fn display<'a>(&self, context: &Context, bounds: BoundingBox, list: &mut DisplayList) {}
+    fn display(&self, context: &Context, bounds: BoundingBox, list: &mut DisplayList) {}
 }
 
 pub struct ChildDelegate<'a> {
@@ -210,10 +210,8 @@ impl UI {
         element
     }
 
-    pub fn element_with_listener<E: Element + 'static, F: Fn(&mut ContextMut, ElementEvent) + 'static>(&mut self, element: E, children: &[ElementReference], listener: F) -> ElementReference {
-        let element = self.element(element, children);
+    pub fn listen<F: Fn(&mut ContextMut, ElementEvent) + 'static>(&mut self, element: ElementReference, listener: F) {
         self.listeners[element.0] = Some(Box::new(listener));
-        element
     }
 
     pub fn property<A: 'static>(&mut self, value: A) -> Property<A> {
@@ -443,11 +441,31 @@ impl UI {
 
 pub struct Empty;
 
+impl Empty {
+    pub fn new() -> Empty {
+        Empty
+    }
+
+    pub fn install(self, ui: &mut UI) -> ElementReference {
+        ui.element(self, &[])
+    }
+}
+
 impl Element for Empty {}
 
 
 pub struct BackgroundColor {
-    pub color: Reference<[f32; 4]>,
+    color: Reference<[f32; 4]>,
+}
+
+impl BackgroundColor {
+    pub fn new(color: Reference<[f32; 4]>) -> BackgroundColor {
+        BackgroundColor { color: color }
+    }
+
+    pub fn install(self, child: ElementReference, ui: &mut UI) -> ElementReference {
+        ui.element(self, &[child])
+    }
 }
 
 impl Element for BackgroundColor {
@@ -459,6 +477,16 @@ impl Element for BackgroundColor {
 
 pub struct Container {
     max_size: Reference<(f32, f32)>,
+}
+
+impl Container {
+    pub fn new(max_size: Reference<(f32, f32)>) -> Container {
+        Container { max_size: max_size }
+    }
+
+    pub fn install(self, child: ElementReference, ui: &mut UI) -> ElementReference {
+        ui.element(self, &[child])
+    }
 }
 
 impl Element for Container {
@@ -540,27 +568,37 @@ impl Element for Column {
 
 
 pub struct TextStyle {
-    pub font: Rc<Font<'static>>,
+    pub font: Font<'static>,
     pub scale: Scale,
 }
 
 pub struct Text {
-    pub text: String,
-    pub style: TextStyle,
+    text: Reference<String>,
+    style: Reference<TextStyle>,
+    glyphs: RefCell<Vec<PositionedGlyph<'static>>>,
 }
 
 impl Text {
-    fn layout_text(&self, x: f32, y: f32, max_width: f32, max_height: f32) -> (Vec<PositionedGlyph<'static>>, (f32, f32)) {
+    pub fn new(text: Reference<String>, style: Reference<TextStyle>) -> Text {
+        Text { text: text, style: style, glyphs: RefCell::new(Vec::new()) }
+    }
+
+    pub fn install(self, ui: &mut UI) -> ElementReference {
+        ui.element(self, &[])
+    }
+
+    fn layout_text(&self, text: &str, max_width: f32, max_height: f32, font: &Font<'static>, scale: Scale) -> (f32, f32) {
         use unicode_normalization::UnicodeNormalization;
 
-        let mut glyphs = Vec::new();
+        let mut glyphs = self.glyphs.borrow_mut();
+        glyphs.clear();
         let mut wrapped = false;
 
-        let v_metrics = self.style.font.v_metrics(self.style.scale);
+        let v_metrics = font.v_metrics(scale);
         let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
-        let mut caret = point(x, y + v_metrics.ascent);
+        let mut caret = point(0.0, v_metrics.ascent);
         let mut last_glyph_id = None;
-        for c in self.text.nfc() {
+        for c in text.nfc() {
             if c.is_control() {
                 match c {
                     '\r' => {
@@ -571,20 +609,20 @@ impl Text {
                 }
                 continue;
             }
-            let base_glyph = if let Some(glyph) = self.style.font.glyph(c) {
+            let base_glyph = if let Some(glyph) = font.glyph(c) {
                 glyph
             } else {
                 continue;
             };
             if let Some(id) = last_glyph_id.take() {
-                caret.x += self.style.font.pair_kerning(self.style.scale, id, base_glyph.id());
+                caret.x += font.pair_kerning(scale, id, base_glyph.id());
             }
             last_glyph_id = Some(base_glyph.id());
-            let mut glyph = base_glyph.scaled(self.style.scale).positioned(caret);
+            let mut glyph = base_glyph.scaled(scale).positioned(caret);
             if let Some(bb) = glyph.pixel_bounding_box() {
-                if bb.max.x > (x + max_width) as i32 {
+                if bb.max.x > (max_width) as i32 {
                     wrapped = true;
-                    caret = point(x, caret.y + advance_height);
+                    caret = point(0.0, caret.y + advance_height);
                     glyph = glyph.into_unpositioned().positioned(caret);
                     last_glyph_id = None;
                 }
@@ -594,20 +632,22 @@ impl Text {
         }
 
         let width = if wrapped { max_width } else { caret.x };
-        (glyphs, (width, v_metrics.ascent - v_metrics.descent))
+        (width, v_metrics.ascent - v_metrics.descent)
     }
 }
 
 impl Element for Text {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let (_, (width, height)) = self.layout_text(0.0, 0.0, max_width, max_height);
-        (width, height)
+        let text = ctx.get(self.text);
+        let style = ctx.get(self.style);
+
+        self.layout_text(text, max_width, max_height, &style.font, style.scale)
     }
 
     fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
-        let (glyphs, _) = self.layout_text(bounds.pos.x, bounds.pos.y, bounds.size.x, bounds.size.y);
-        for glyph in glyphs.iter() {
-            list.glyph(glyph.standalone());
+        for glyph in self.glyphs.borrow().iter() {
+            let position = glyph.position();
+            list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
         }
     }
 }
