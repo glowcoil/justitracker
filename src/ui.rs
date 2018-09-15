@@ -54,8 +54,6 @@ macro_rules! reference {
     }
 }
 
-reference! { ComponentReference }
-
 reference! { Property }
 
 impl<A> Property<A> {
@@ -133,18 +131,12 @@ impl<'a> ContextMut<'a> {
     }
 }
 
-pub struct Listener<E>(Box<Fn(&Slab<Box<UnsafeAny>>, &mut ContextMut, E)>);
+pub struct Listener<E>(Box<Fn(&mut ContextMut, E)>);
 
 impl<E> Listener<E> {
     pub fn new<F: Fn(&mut ContextMut, E) + 'static>(callback: F) -> Listener<E> {
-        Listener(Box::new(move |_, context, event| {
+        Listener(Box::new(move |context, event| {
             callback(context, event)
-        }))
-    }
-
-    pub fn component<C: 'static, F: Fn(&C, &mut ContextMut, E) + 'static>(component: ComponentReference<C>, callback: F) -> Listener<E> {
-        Listener(Box::new(move |components, context, event| {
-            callback(unsafe { components[component.index].downcast_ref_unchecked() }, context, event)
         }))
     }
 }
@@ -155,7 +147,6 @@ pub struct UI {
     width: f32,
     height: f32,
 
-    components: Slab<Box<UnsafeAny>>,
     properties: Slab<Box<UnsafeAny>>,
 
     root: ElementReference,
@@ -176,7 +167,6 @@ impl UI {
             width: width,
             height: height,
 
-            components: Slab::new(),
             properties: Slab::new(),
 
             root: ElementReference(0),
@@ -234,11 +224,6 @@ impl UI {
         let element = self.element(element, children);
         self.listeners[element.0] = Some(listener);
         element
-    }
-
-    pub fn component<C: 'static>(&mut self, component: C) -> ComponentReference<C> {
-        let index = self.components.insert(Box::new(component));
-        ComponentReference::new(index)
     }
 
     pub fn property<A: 'static>(&mut self, value: A) -> Property<A> {
@@ -409,7 +394,7 @@ impl UI {
 
     fn fire_event(&mut self, element: ElementReference, event: ElementEvent) -> bool {
         if let Some(Listener(ref callback)) = self.listeners[element.0] {
-            callback(&self.components, &mut ContextMut { properties: &mut self.properties }, event);
+            callback(&mut ContextMut { properties: &mut self.properties }, event);
             true
         } else {
             false
@@ -624,12 +609,12 @@ impl Text {
 }
 
 impl Element for Text {
-    fn layout<'a>(&self, ctx: &Context<'a>, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let (_, (width, height)) = self.layout_text(0.0, 0.0, max_width, max_height);
         (width, height)
     }
 
-    fn display<'a>(&self, ctx: &Context<'a>, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
         let (glyphs, _) = self.layout_text(bounds.pos.x, bounds.pos.y, bounds.size.x, bounds.size.y);
         for glyph in glyphs.iter() {
             list.glyph(glyph.standalone());
