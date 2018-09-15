@@ -85,12 +85,35 @@ fn main() {
     let text = ui.element(Text { text: "test".to_string(), style: TextStyle { font: font, scale: Scale::uniform(14.0) } }, &[]);
     let padding = ui.property(10.0);
     let p = ui.element(Padding { padding: padding.reference() }, &[text]);
+    #[derive(Copy, Clone, Eq, PartialEq)]
+    enum ButtonState {
+        Up,
+        Hover,
+        Down,
+    }
+    let state = ui.property(ButtonState::Up);
     let color = ui.property([0.15, 0.18, 0.23, 1.0]);
     let root = ui.element_with_listener(BackgroundColor { color: color.reference() }, &[p], Listener::new(move |ctx, event| {
-        if let ElementEvent::MouseEnter = event {
-            ctx.set(color, [0.02, 0.2, 0.6, 1.0]);
-        } else if let ElementEvent::MouseLeave = event {
-            ctx.set(color, [0.15, 0.18, 0.23, 1.0]);
+        match event {
+            ElementEvent::MouseEnter => {
+                ctx.set(state, ButtonState::Hover);
+                ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
+            }
+            ElementEvent::MouseLeave => {
+                ctx.set(state, ButtonState::Up);
+                ctx.set(color, [0.15, 0.18, 0.23, 1.0])
+            }
+            ElementEvent::MousePress(MouseButton::Left) => {
+                ctx.set(state, ButtonState::Down);
+                ctx.set(color, [0.02, 0.2, 0.6, 1.0]);
+            }
+            ElementEvent::MouseRelease(MouseButton::Left) => {
+                if *ctx.get(state) == ButtonState::Down {
+                    ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
+                    println!("click!");
+                }
+            }
+            _ => {}
         }
     }));
     ui.root(root);
