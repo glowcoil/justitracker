@@ -56,13 +56,67 @@ macro_rules! reference {
 
 reference! { Property }
 
-impl<A> Property<A> {
-    pub fn reference(&self) -> Reference<A> {
-        Reference::new(self.index)
+reference! { Reference }
+
+impl<A> From<Property<A>> for Reference<A> {
+    fn from(property: Property<A>) -> Reference<A> {
+        Reference::new(property.index)
     }
 }
 
-reference! { Reference }
+pub enum ReferenceOrValue<A> {
+    Reference(Reference<A>),
+    Value(A),
+}
+
+impl<A: 'static> ReferenceOrValue<A> {
+    fn get<'a>(&'a self, context: &'a Context) -> &'a A {
+        match *self {
+            ReferenceOrValue::Reference(reference) => &*unsafe { context.properties[reference.index].downcast_ref_unchecked() },
+            ReferenceOrValue::Value(ref value) => value,
+        }
+    }
+}
+
+impl<A> From<Property<A>> for ReferenceOrValue<A> {
+    fn from(property: Property<A>) -> ReferenceOrValue<A> {
+        ReferenceOrValue::Reference(Reference::new(property.index))
+    }
+}
+
+impl<A> From<Reference<A>> for ReferenceOrValue<A> {
+    fn from(reference: Reference<A>) -> ReferenceOrValue<A> {
+        ReferenceOrValue::Reference(reference)
+    }
+}
+
+impl<A> From<A> for ReferenceOrValue<A> {
+    fn from(value: A) -> ReferenceOrValue<A> {
+        ReferenceOrValue::Value(value)
+    }
+}
+
+pub trait GetProperty {
+    type Value;
+
+    fn get<'a>(&self, ui: &'a Context) -> &'a Self::Value;
+}
+
+impl<A: 'static> GetProperty for Property<A> {
+    type Value = A;
+
+    fn get<'a>(&self, context: &'a Context) -> &'a Self::Value {
+        &*unsafe { context.properties[self.index].downcast_ref_unchecked() }
+    }
+}
+
+impl<A: 'static> GetProperty for Reference<A> {
+    type Value = A;
+
+    fn get<'a>(&self, context: &'a Context) -> &'a Self::Value {
+        &*unsafe { context.properties[self.index].downcast_ref_unchecked() }
+    }
+}
 
 /* element */
 
@@ -84,14 +138,14 @@ pub trait Element {
 pub struct ChildDelegate<'a> {
     reference: ElementReference,
     element: &'a Element,
-    properties: &'a Slab<Box<UnsafeAny>>,
+    context: &'a Context,
     bounds: BoundingBox,
     children: Vec<ChildDelegate<'a>>,
 }
 
 impl<'a> ChildDelegate<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        let (width, height) = self.element.layout(&Context { properties: self.properties }, max_width, max_height, &mut self.children);
+        let (width, height) = self.element.layout(self.context, max_width, max_height, &mut self.children);
         self.bounds.size.x = width;
         self.bounds.size.y = height;
         (width, height)
@@ -103,26 +157,16 @@ impl<'a> ChildDelegate<'a> {
     }
 }
 
-pub struct Context<'a> {
-    properties: &'a Slab<Box<UnsafeAny>>,
+pub struct Context {
+    properties: Slab<Box<UnsafeAny>>,
 }
 
-impl<'a> Context<'a> {
-    pub fn get<A: 'static>(&self, reference: Reference<A>) -> &'a A {
-        &*unsafe { self.properties[reference.index].downcast_ref_unchecked() }
-    }
-}
-
-pub struct ContextMut<'a> {
-    properties: &'a mut Slab<Box<UnsafeAny>>,
-}
-
-impl<'a> ContextMut<'a> {
-    pub fn get<'b, A: 'static>(&'b self, property: Property<A>) -> &'b A {
-        &*unsafe { self.properties[property.index].downcast_ref_unchecked() }
+impl Context {
+    pub fn get<'a, A: 'static, G: GetProperty<Value=A>>(&'a self, getter: G) -> &'a A {
+        getter.get(self)
     }
 
-    pub fn get_mut<'b, A: 'static>(&'b mut self, property: Property<A>) -> &'b mut A {
+    pub fn get_mut<'a, A: 'static>(&'a mut self, property: Property<A>) -> &'a mut A {
         &mut *unsafe { self.properties[property.index].downcast_mut_unchecked() }
     }
 
@@ -137,14 +181,14 @@ pub struct UI {
     width: f32,
     height: f32,
 
-    properties: Slab<Box<UnsafeAny>>,
+    context: Context,
 
     root: ElementReference,
     elements: Slab<Box<Element>>,
     parents: Slab<Option<ElementReference>>,
     children: Slab<Vec<ElementReference>>,
     layout: Slab<BoundingBox>,
-    listeners: Slab<Option<Box<Fn(&mut ContextMut, ElementEvent)>>>,
+    listeners: Slab<Option<Box<Fn(&mut Context, ElementEvent)>>>,
 
     under_cursor: Vec<ElementReference>,
 
@@ -157,7 +201,7 @@ impl UI {
             width: width,
             height: height,
 
-            properties: Slab::new(),
+            context: Context { properties: Slab::new() },
 
             root: ElementReference(0),
             elements: Slab::new(),
@@ -210,14 +254,16 @@ impl UI {
         element
     }
 
-    pub fn listen<F: Fn(&mut ContextMut, ElementEvent) + 'static>(&mut self, element: ElementReference, listener: F) {
+    pub fn listen<F: Fn(&mut Context, ElementEvent) + 'static>(&mut self, element: ElementReference, listener: F) {
         self.listeners[element.0] = Some(Box::new(listener));
     }
 
     pub fn property<A: 'static>(&mut self, value: A) -> Property<A> {
-        let index = self.properties.insert(Box::new(value));
+        let index = self.context.properties.insert(Box::new(value));
         Property::new(index)
     }
+
+    // pub fn map<A: 'static>(&mut self, )
 
     /* event handling */
 
@@ -382,7 +428,7 @@ impl UI {
 
     fn fire_event(&mut self, element: ElementReference, event: ElementEvent) -> bool {
         if let Some(ref callback) = self.listeners[element.0] {
-            callback(&mut ContextMut { properties: &mut self.properties }, event);
+            callback(&mut self.context, event);
             true
         } else {
             false
@@ -398,7 +444,7 @@ impl UI {
     }
 
     fn display_element(&self, element: ElementReference, list: &mut DisplayList) {
-        self.elements[element.0].display(&Context { properties: &self.properties }, self.layout[element.0], list);
+        self.elements[element.0].display(&self.context, self.layout[element.0], list);
         for child in self.children[element.0].iter() {
             self.display_element(*child, list);
         }
@@ -407,22 +453,22 @@ impl UI {
     /* layout */
 
     fn layout(&mut self) {
-        let mut root = Self::child_delegate(&self.properties, &self.children, &self.elements, self.root);
+        let mut root = Self::child_delegate(&self.context, &self.children, &self.elements, self.root);
         let (width, height) = root.layout(self.width, self.height);
         Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
-    fn child_delegate<'a>(properties: &'a Slab<Box<UnsafeAny>>, children: &'a Slab<Vec<ElementReference>>, elements: &'a Slab<Box<Element>>, reference: ElementReference) -> ChildDelegate<'a> {
+    fn child_delegate<'a>(context: &'a Context, children: &'a Slab<Vec<ElementReference>>, elements: &'a Slab<Box<Element>>, reference: ElementReference) -> ChildDelegate<'a> {
         let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
         let children_indices = &children[reference.0];
         child_delegates.reserve(children_indices.len());
         for child in children_indices {
-            child_delegates.push(Self::child_delegate(properties, children, elements, *child));
+            child_delegates.push(Self::child_delegate(context, children, elements, *child));
         }
         ChildDelegate {
             reference: reference,
             element: &*elements[reference.0],
-            properties: properties,
+            context: context,
             bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
             children: child_delegates,
         }
@@ -694,7 +740,7 @@ enum ButtonState {
 pub struct Button {
     text: Reference<String>,
     style: Reference<TextStyle>,
-    on_click: Option<Box<Fn(&mut ContextMut)>>,
+    on_click: Option<Box<Fn(&mut Context)>>,
 }
 
 impl Button {
@@ -702,7 +748,7 @@ impl Button {
         Button { text: text, style: style, on_click: None }
     }
 
-    pub fn on_click<F: Fn(&mut ContextMut) + 'static>(mut self, on_click: F) -> Button {
+    pub fn on_click<F: Fn(&mut Context) + 'static>(mut self, on_click: F) -> Button {
         self.on_click = Some(Box::new(on_click));
         self
     }
@@ -713,8 +759,8 @@ impl Button {
 
         let text = Text::new(self.text, self.style).install(ui);
         let padding = ui.property(10.0);
-        let padding = Padding::new(padding.reference()).install(ui, text);
-        let button = BackgroundColor::new(color.reference()).install(ui, padding);
+        let padding = Padding::new(padding.into()).install(ui, text);
+        let button = BackgroundColor::new(color.into()).install(ui, padding);
         ui.listen(button, move |ctx, event| {
             match event {
                 ElementEvent::MouseEnter => {

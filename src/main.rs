@@ -85,21 +85,21 @@ fn main() {
     let style = ui.property(TextStyle { font: font, scale: Scale::uniform(14.0) });
     let text = ui.property("test".to_string());
 
-    let button = Button::with_text(text.reference(), style.reference())
+    let button = Button::with_text(text.into(), style.into())
         .on_click(|_| println!("click!"))
         .install(&mut ui);
-    let button2 = Button::with_text(text.reference(), style.reference()).install(&mut ui);
+    let button2 = Button::with_text(text.into(), style.into()).install(&mut ui);
 
     let text2 = ui.property("hello".to_string());
-    let text2 = Text::new(text2.reference(), style.reference()).install(&mut ui);
+    let text2 = Text::new(text2.into(), style.into()).install(&mut ui);
 
     let padding = ui.property(5.0);
-    let col = Column::new(padding.reference()).install(&mut ui, &[button, button2, text2]);
+    let col = Column::new(padding.into()).install(&mut ui, &[button, button2, text2]);
 
     let text3 = ui.property("hi hi hi hi hi".to_string());
-    let text3 = Text::new(text3.reference(), style.reference()).install(&mut ui);
+    let text3 = Text::new(text3.into(), style.into()).install(&mut ui);
 
-    let row = Row::new(padding.reference()).install(&mut ui, &[col, text3]);
+    let row = Row::new(padding.into()).install(&mut ui, &[col, text3]);
 
     ui.root(row);
 
@@ -432,6 +432,21 @@ fn main() {
 // }
 
 // impl Element for Grid {}
+
+
+// struct IntegerInput {
+//     value: Property<i32>,
+// }
+
+// impl IntegerInput {
+//     fn new(value: Property<i32>) -> IntegerInput {
+//         IntegerInput { value: value }
+//     }
+
+//     fn install(self, ui: &mut UI) -> ElementRef {
+
+//     }
+// }
 
 
 // struct IntegerInput {
