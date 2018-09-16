@@ -501,11 +501,11 @@ impl Element for Empty {}
 
 
 pub struct BackgroundColor {
-    color: Reference<[f32; 4]>,
+    color: ReferenceOrValue<[f32; 4]>,
 }
 
 impl BackgroundColor {
-    pub fn new(color: Reference<[f32; 4]>) -> BackgroundColor {
+    pub fn new(color: ReferenceOrValue<[f32; 4]>) -> BackgroundColor {
         BackgroundColor { color: color }
     }
 
@@ -516,17 +516,17 @@ impl BackgroundColor {
 
 impl Element for BackgroundColor {
     fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *ctx.get(self.color) });
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *self.color.get(ctx) });
     }
 }
 
 
 pub struct Container {
-    max_size: Reference<(f32, f32)>,
+    max_size: ReferenceOrValue<(f32, f32)>,
 }
 
 impl Container {
-    pub fn new(max_size: Reference<(f32, f32)>) -> Container {
+    pub fn new(max_size: ReferenceOrValue<(f32, f32)>) -> Container {
         Container { max_size: max_size }
     }
 
@@ -537,7 +537,7 @@ impl Container {
 
 impl Element for Container {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let (self_max_width, self_max_height) = *ctx.get(self.max_size);
+        let (self_max_width, self_max_height) = *self.max_size.get(ctx);
         let max_width = self_max_width.min(max_width);
         let max_height = self_max_height.min(max_height);
 
@@ -555,11 +555,11 @@ impl Element for Container {
 
 
 pub struct Padding {
-    padding: Reference<f32>,
+    padding: ReferenceOrValue<f32>,
 }
 
 impl Padding {
-    pub fn new(padding: Reference<f32>) -> Padding {
+    pub fn new(padding: ReferenceOrValue<f32>) -> Padding {
         Padding { padding: padding }
     }
 
@@ -570,7 +570,7 @@ impl Padding {
 
 impl Element for Padding {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let padding = *ctx.get(self.padding);
+        let padding = *self.padding.get(ctx);
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -585,11 +585,11 @@ impl Element for Padding {
 
 
 pub struct Row {
-    spacing: Reference<f32>,
+    spacing: ReferenceOrValue<f32>,
 }
 
 impl Row {
-    pub fn new(spacing: Reference<f32>) -> Row {
+    pub fn new(spacing: ReferenceOrValue<f32>) -> Row {
         Row { spacing: spacing }
     }
 
@@ -600,7 +600,7 @@ impl Row {
 
 impl Element for Row {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let spacing = *ctx.get(self.spacing);
+        let spacing = *self.spacing.get(ctx);
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -615,11 +615,11 @@ impl Element for Row {
 
 
 pub struct Column {
-    spacing: Reference<f32>,
+    spacing: ReferenceOrValue<f32>,
 }
 
 impl Column {
-    pub fn new(spacing: Reference<f32>) -> Column {
+    pub fn new(spacing: ReferenceOrValue<f32>) -> Column {
         Column { spacing: spacing }
     }
 
@@ -630,7 +630,7 @@ impl Column {
 
 impl Element for Column {
     fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let spacing = *ctx.get(self.spacing);
+        let spacing = *self.spacing.get(ctx);
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
         for child in children {
@@ -758,8 +758,7 @@ impl Button {
         let color = ui.property([0.15, 0.18, 0.23, 1.0]);
 
         let text = Text::new(self.text, self.style).install(ui);
-        let padding = ui.property(10.0);
-        let padding = Padding::new(padding.into()).install(ui, text);
+        let padding = Padding::new(10.0f32.into()).install(ui, text);
         let button = BackgroundColor::new(color.into()).install(ui, padding);
         ui.listen(button, move |ctx, event| {
             match event {
