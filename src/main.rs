@@ -14,6 +14,7 @@ extern crate nfd;
 extern crate anymap;
 extern crate unsafe_any;
 extern crate slab;
+extern crate priority_queue;
 
 use std::rc::Rc;
 
@@ -82,33 +83,33 @@ fn main() {
     let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
     let font = collection.into_font().unwrap();
 
-    let style = ui.property(TextStyle { font: font, scale: Scale::uniform(14.0) });
-    let text = ui.property("test".to_string());
+    let style = ui.prop(TextStyle { font: font, scale: Scale::uniform(14.0) });
+    let text = ui.prop("test".to_string());
+
+    let value = ui.prop(0);
+    let int = IntegerInput::new(value, style.into()).install(&mut ui);
 
     let button = Button::with_text(text.into(), style.into())
-        .on_click(|_| println!("click!"))
+        .on_click(move |ctx| {
+            let old = *ctx.get(value);
+            ctx.set(value, old + 1);
+            println!("click!")
+        })
         .install(&mut ui);
     let button2 = Button::with_text(text.into(), style.into()).install(&mut ui);
 
-    let text2 = ui.property("hello".to_string());
+    let text2 = ui.prop("hello".to_string());
     let text2 = Text::new(text2.into(), style.into()).install(&mut ui);
 
-    let padding = ui.property(5.0);
+    let padding = ui.prop(5.0);
     let col = Column::new(padding.into()).install(&mut ui, &[button, button2, text2]);
 
-    let text3 = ui.property("hi hi hi hi hi".to_string());
+    let text3 = ui.prop("hi hi hi hi hi".to_string());
     let text3 = Text::new(text3.into(), style.into()).install(&mut ui);
 
-    let row = Row::new(padding.into()).install(&mut ui, &[col, text3]);
+    let row = Row::new(padding.into()).install(&mut ui, &[col, text3, int]);
 
     ui.root(row);
-
-    // // ui.set_global_element_style::<Label, BoxStyle>(BoxStyle::padding(5.0));
-    // // ui.set_global_style::<StackStyle>(StackStyle::grow(Grow::Equal).spacing(5.0));
-
-    // ui.set_global_element_style::<Button, BoxStyle>(BoxStyle::padding(5.0));
-
-    // let root = ui.place_root(Grid::install);
 
     renderer.render(ui.display());
 
@@ -434,20 +435,43 @@ fn main() {
 // impl Element for Grid {}
 
 
-// struct IntegerInput {
-//     value: Property<i32>,
-// }
+struct IntegerInput {
+    value: Prop<i32>,
+    style: Ref<TextStyle>,
+}
 
-// impl IntegerInput {
-//     fn new(value: Property<i32>) -> IntegerInput {
-//         IntegerInput { value: value }
-//     }
+impl IntegerInput {
+    fn new(value: Prop<i32>, style: Ref<TextStyle>) -> IntegerInput {
+        IntegerInput { value: value, style: style }
+    }
 
-//     fn install(self, ui: &mut UI) -> ElementRef {
-
-//     }
-// }
-
+    fn install(self, ui: &mut UI) -> ElementRef {
+        let string = ui.map(self.value, |value| value.to_string());
+        let text = Text::new(string, self.style).install(ui);
+        ui.listen(text, move |ctx, event| {
+            match event {
+                ElementEvent::MousePress(MouseButton::Left) => {
+                    let old = *ctx.get(self.value);
+                    ctx.set(self.value, old + 1);
+                }
+                // ElementEvent::MouseMove(position) => {
+                //     if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {
+                //         if self.old_value.is_none() {
+                //             self.old_value = Some(self.value);
+                //         }
+                //         let dy = -(ctx.get_input_state().mouse_position.y - mouse_drag_origin.y);
+                //         ctx.fire::<i32>(self.old_value.unwrap() + (dy / 8.0) as i32);
+                //     }
+                // }
+                // ElementEvent::MouseRelease(MouseButton::Left) => {
+                //     self.old_value = None;
+                // }
+                _ => {}
+            }
+        });
+        text
+    }
+}
 
 // struct IntegerInput {
 //     value: i32,

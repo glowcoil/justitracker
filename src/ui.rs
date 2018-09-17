@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use anymap::AnyMap;
 use unsafe_any::UnsafeAny;
 
@@ -14,6 +12,8 @@ use std::f32;
 use std::cell::RefCell;
 
 use slab::Slab;
+use priority_queue::PriorityQueue;
+use std::cmp::Reverse;
 
 use glium::glutin;
 use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
@@ -23,7 +23,7 @@ use render::*;
 /* references */
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub struct ElementReference(usize);
+pub struct ElementRef(usize);
 
 macro_rules! reference {
     ($type:ident) => {
@@ -54,67 +54,45 @@ macro_rules! reference {
     }
 }
 
-reference! { Property }
+reference! { Prop }
 
-reference! { Reference }
+reference! { Ref }
 
-impl<A> From<Property<A>> for Reference<A> {
-    fn from(property: Property<A>) -> Reference<A> {
-        Reference::new(property.index)
+impl<A> From<Prop<A>> for Ref<A> {
+    fn from(prop: Prop<A>) -> Ref<A> {
+        Ref::new(prop.index)
     }
 }
 
-pub enum ReferenceOrValue<A> {
-    Reference(Reference<A>),
+pub enum RefOrValue<A> {
+    Ref(Ref<A>),
     Value(A),
 }
 
-impl<A: 'static> ReferenceOrValue<A> {
+impl<A: 'static> RefOrValue<A> {
     fn get<'a>(&'a self, context: &'a Context) -> &'a A {
         match *self {
-            ReferenceOrValue::Reference(reference) => &*unsafe { context.properties[reference.index].downcast_ref_unchecked() },
-            ReferenceOrValue::Value(ref value) => value,
+            RefOrValue::Ref(reference) => &*unsafe { context.properties[reference.index].downcast_ref_unchecked() },
+            RefOrValue::Value(ref value) => value,
         }
     }
 }
 
-impl<A> From<Property<A>> for ReferenceOrValue<A> {
-    fn from(property: Property<A>) -> ReferenceOrValue<A> {
-        ReferenceOrValue::Reference(Reference::new(property.index))
+impl<A> From<Prop<A>> for RefOrValue<A> {
+    fn from(prop: Prop<A>) -> RefOrValue<A> {
+        RefOrValue::Ref(Ref::new(prop.index))
     }
 }
 
-impl<A> From<Reference<A>> for ReferenceOrValue<A> {
-    fn from(reference: Reference<A>) -> ReferenceOrValue<A> {
-        ReferenceOrValue::Reference(reference)
+impl<A> From<Ref<A>> for RefOrValue<A> {
+    fn from(reference: Ref<A>) -> RefOrValue<A> {
+        RefOrValue::Ref(reference)
     }
 }
 
-impl<A> From<A> for ReferenceOrValue<A> {
-    fn from(value: A) -> ReferenceOrValue<A> {
-        ReferenceOrValue::Value(value)
-    }
-}
-
-pub trait GetProperty {
-    type Value;
-
-    fn get<'a>(&self, ui: &'a Context) -> &'a Self::Value;
-}
-
-impl<A: 'static> GetProperty for Property<A> {
-    type Value = A;
-
-    fn get<'a>(&self, context: &'a Context) -> &'a Self::Value {
-        &*unsafe { context.properties[self.index].downcast_ref_unchecked() }
-    }
-}
-
-impl<A: 'static> GetProperty for Reference<A> {
-    type Value = A;
-
-    fn get<'a>(&self, context: &'a Context) -> &'a Self::Value {
-        &*unsafe { context.properties[self.index].downcast_ref_unchecked() }
+impl<A> From<A> for RefOrValue<A> {
+    fn from(value: A) -> RefOrValue<A> {
+        RefOrValue::Value(value)
     }
 }
 
@@ -136,7 +114,7 @@ pub trait Element {
 }
 
 pub struct ChildDelegate<'a> {
-    reference: ElementReference,
+    reference: ElementRef,
     element: &'a Element,
     context: &'a Context,
     bounds: BoundingBox,
@@ -159,19 +137,31 @@ impl<'a> ChildDelegate<'a> {
 
 pub struct Context {
     properties: Slab<Box<UnsafeAny>>,
+    dirty: Slab<bool>,
+    dependencies: Slab<Vec<usize>>,
+    dependents: Slab<Vec<usize>>,
+    update: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>)>>>,
+    priorities: Slab<u32>,
+    queue: PriorityQueue<usize, Reverse<u32>>,
 }
 
 impl Context {
-    pub fn get<'a, A: 'static, G: GetProperty<Value=A>>(&'a self, getter: G) -> &'a A {
-        getter.get(self)
+    pub fn get<'a, A: 'static, R: Into<Ref<A>>>(&'a self, reference: R) -> &'a A {
+        Context::get_prop(&self.properties, reference.into())
     }
 
-    pub fn get_mut<'a, A: 'static>(&'a mut self, property: Property<A>) -> &'a mut A {
-        &mut *unsafe { self.properties[property.index].downcast_mut_unchecked() }
+    pub fn get_mut<'a, A: 'static>(&'a mut self, prop: Prop<A>) -> &'a mut A {
+        self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
+        &mut *unsafe { self.properties[prop.index].downcast_mut_unchecked() }
     }
 
-    pub fn set<A: 'static>(&mut self, property: Property<A>, value: A) {
-        self.properties[property.index] = Box::new(value);
+    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
+        self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
+        self.properties[prop.index] = Box::new(value);
+    }
+
+    fn get_prop<'a, A: 'static>(props: &'a Slab<Box<UnsafeAny>>, reference: Ref<A>) -> &'a A {
+        &*unsafe { props[reference.index].downcast_ref_unchecked() }
     }
 }
 
@@ -183,14 +173,14 @@ pub struct UI {
 
     context: Context,
 
-    root: ElementReference,
+    root: ElementRef,
     elements: Slab<Box<Element>>,
-    parents: Slab<Option<ElementReference>>,
-    children: Slab<Vec<ElementReference>>,
+    parents: Slab<Option<ElementRef>>,
+    children: Slab<Vec<ElementRef>>,
     layout: Slab<BoundingBox>,
     listeners: Slab<Option<Box<Fn(&mut Context, ElementEvent)>>>,
 
-    under_cursor: Vec<ElementReference>,
+    under_cursor: Vec<ElementRef>,
 
     input_state: InputState,
 }
@@ -201,9 +191,17 @@ impl UI {
             width: width,
             height: height,
 
-            context: Context { properties: Slab::new() },
+            context: Context {
+                properties: Slab::new(),
+                dirty: Slab::new(),
+                dependencies: Slab::new(),
+                dependents: Slab::new(),
+                update: Slab::new(),
+                priorities: Slab::new(),
+                queue: PriorityQueue::new(),
+            },
 
-            root: ElementReference(0),
+            root: ElementRef(0),
             elements: Slab::new(),
             parents: Slab::new(),
             children: Slab::new(),
@@ -235,13 +233,13 @@ impl UI {
 
     /* tree */
 
-    pub fn root(&mut self, element: ElementReference) {
+    pub fn root(&mut self, element: ElementRef) {
         self.root = element;
         self.layout();
     }
 
-    pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementReference]) -> ElementReference {
-        let element = ElementReference(self.elements.insert(Box::new(element)));
+    pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
+        let element = ElementRef(self.elements.insert(Box::new(element)));
         self.parents.insert(None);
         let mut children_vec = Vec::new();
         children_vec.extend_from_slice(children);
@@ -254,16 +252,34 @@ impl UI {
         element
     }
 
-    pub fn listen<F: Fn(&mut Context, ElementEvent) + 'static>(&mut self, element: ElementReference, listener: F) {
+    pub fn listen<F: Fn(&mut Context, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
         self.listeners[element.0] = Some(Box::new(listener));
     }
 
-    pub fn property<A: 'static>(&mut self, value: A) -> Property<A> {
+    pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
         let index = self.context.properties.insert(Box::new(value));
-        Property::new(index)
+        self.context.dirty.insert(true);
+        self.context.dependencies.insert(Vec::new());
+        self.context.dependents.insert(Vec::new());
+        self.context.update.insert(None);
+        self.context.priorities.insert(0);
+        Prop::new(index)
     }
 
-    // pub fn map<A: 'static>(&mut self, )
+    pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+        let a = a.into();
+        let value = f(self.context.get(a));
+        let b = self.prop(value);
+        self.context.dirty[b.index] = false;
+        self.context.dependencies[b.index].push(a.index);
+        self.context.dependents[a.index].push(b.index);
+        self.context.priorities[b.index] = self.context.priorities[a.index] + 1;
+        self.context.update[b.index] = Some(Box::new(move |props| {
+            let value = f(Context::get_prop(props, a));
+            props[b.index] = Box::new(value);
+        }));
+        b.into()
+    }
 
     /* event handling */
 
@@ -410,12 +426,13 @@ impl UI {
             _ => {}
         }
 
+        self.update();
         self.layout();
 
         ui_response
     }
 
-    fn bubble_event(&mut self, element: ElementReference, event: ElementEvent) {
+    fn bubble_event(&mut self, element: ElementRef, event: ElementEvent) {
         let mut handler = Some(element);
         while let Some(element) = handler {
             if self.fire_event(element, event) {
@@ -426,12 +443,23 @@ impl UI {
         }
     }
 
-    fn fire_event(&mut self, element: ElementReference, event: ElementEvent) -> bool {
+    fn fire_event(&mut self, element: ElementRef, event: ElementEvent) -> bool {
         if let Some(ref callback) = self.listeners[element.0] {
             callback(&mut self.context, event);
             true
         } else {
             false
+        }
+    }
+
+    fn update(&mut self) {
+        while let Some((index, _)) = self.context.queue.pop() {
+            if let Some(ref update) = self.context.update[index] {
+                update(&mut self.context.properties);
+            }
+            for dependent in self.context.dependents[index].iter() {
+                self.context.queue.push(*dependent, Reverse(self.context.priorities[*dependent]));
+            }
         }
     }
 
@@ -443,7 +471,7 @@ impl UI {
         list
     }
 
-    fn display_element(&self, element: ElementReference, list: &mut DisplayList) {
+    fn display_element(&self, element: ElementRef, list: &mut DisplayList) {
         self.elements[element.0].display(&self.context, self.layout[element.0], list);
         for child in self.children[element.0].iter() {
             self.display_element(*child, list);
@@ -458,7 +486,7 @@ impl UI {
         Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
-    fn child_delegate<'a>(context: &'a Context, children: &'a Slab<Vec<ElementReference>>, elements: &'a Slab<Box<Element>>, reference: ElementReference) -> ChildDelegate<'a> {
+    fn child_delegate<'a>(context: &'a Context, children: &'a Slab<Vec<ElementRef>>, elements: &'a Slab<Box<Element>>, reference: ElementRef) -> ChildDelegate<'a> {
         let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
         let children_indices = &children[reference.0];
         child_delegates.reserve(children_indices.len());
@@ -492,7 +520,7 @@ impl Empty {
         Empty
     }
 
-    pub fn install(self, ui: &mut UI) -> ElementReference {
+    pub fn install(self, ui: &mut UI) -> ElementRef {
         ui.element(self, &[])
     }
 }
@@ -501,15 +529,15 @@ impl Element for Empty {}
 
 
 pub struct BackgroundColor {
-    color: ReferenceOrValue<[f32; 4]>,
+    color: RefOrValue<[f32; 4]>,
 }
 
 impl BackgroundColor {
-    pub fn new(color: ReferenceOrValue<[f32; 4]>) -> BackgroundColor {
+    pub fn new(color: RefOrValue<[f32; 4]>) -> BackgroundColor {
         BackgroundColor { color: color }
     }
 
-    pub fn install(self, ui: &mut UI, child: ElementReference) -> ElementReference {
+    pub fn install(self, ui: &mut UI, child: ElementRef) -> ElementRef {
         ui.element(self, &[child])
     }
 }
@@ -522,15 +550,15 @@ impl Element for BackgroundColor {
 
 
 pub struct Container {
-    max_size: ReferenceOrValue<(f32, f32)>,
+    max_size: RefOrValue<(f32, f32)>,
 }
 
 impl Container {
-    pub fn new(max_size: ReferenceOrValue<(f32, f32)>) -> Container {
+    pub fn new(max_size: RefOrValue<(f32, f32)>) -> Container {
         Container { max_size: max_size }
     }
 
-    pub fn install(self, ui: &mut UI, child: ElementReference) -> ElementReference {
+    pub fn install(self, ui: &mut UI, child: ElementRef) -> ElementRef {
         ui.element(self, &[child])
     }
 }
@@ -555,15 +583,15 @@ impl Element for Container {
 
 
 pub struct Padding {
-    padding: ReferenceOrValue<f32>,
+    padding: RefOrValue<f32>,
 }
 
 impl Padding {
-    pub fn new(padding: ReferenceOrValue<f32>) -> Padding {
+    pub fn new(padding: RefOrValue<f32>) -> Padding {
         Padding { padding: padding }
     }
 
-    pub fn install(self, ui: &mut UI, child: ElementReference) -> ElementReference {
+    pub fn install(self, ui: &mut UI, child: ElementRef) -> ElementRef {
         ui.element(self, &[child])
     }
 }
@@ -585,15 +613,15 @@ impl Element for Padding {
 
 
 pub struct Row {
-    spacing: ReferenceOrValue<f32>,
+    spacing: RefOrValue<f32>,
 }
 
 impl Row {
-    pub fn new(spacing: ReferenceOrValue<f32>) -> Row {
+    pub fn new(spacing: RefOrValue<f32>) -> Row {
         Row { spacing: spacing }
     }
 
-    pub fn install(self, ui: &mut UI, children: &[ElementReference]) -> ElementReference {
+    pub fn install(self, ui: &mut UI, children: &[ElementRef]) -> ElementRef {
         ui.element(self, children)
     }
 }
@@ -615,15 +643,15 @@ impl Element for Row {
 
 
 pub struct Column {
-    spacing: ReferenceOrValue<f32>,
+    spacing: RefOrValue<f32>,
 }
 
 impl Column {
-    pub fn new(spacing: ReferenceOrValue<f32>) -> Column {
+    pub fn new(spacing: RefOrValue<f32>) -> Column {
         Column { spacing: spacing }
     }
 
-    pub fn install(self, ui: &mut UI, children: &[ElementReference]) -> ElementReference {
+    pub fn install(self, ui: &mut UI, children: &[ElementRef]) -> ElementRef {
         ui.element(self, children)
     }
 }
@@ -650,17 +678,17 @@ pub struct TextStyle {
 }
 
 pub struct Text {
-    text: Reference<String>,
-    style: Reference<TextStyle>,
+    text: Ref<String>,
+    style: Ref<TextStyle>,
     glyphs: RefCell<Vec<PositionedGlyph<'static>>>,
 }
 
 impl Text {
-    pub fn new(text: Reference<String>, style: Reference<TextStyle>) -> Text {
+    pub fn new(text: Ref<String>, style: Ref<TextStyle>) -> Text {
         Text { text: text, style: style, glyphs: RefCell::new(Vec::new()) }
     }
 
-    pub fn install(self, ui: &mut UI) -> ElementReference {
+    pub fn install(self, ui: &mut UI) -> ElementRef {
         ui.element(self, &[])
     }
 
@@ -738,13 +766,13 @@ enum ButtonState {
 }
 
 pub struct Button {
-    text: Reference<String>,
-    style: Reference<TextStyle>,
+    text: Ref<String>,
+    style: Ref<TextStyle>,
     on_click: Option<Box<Fn(&mut Context)>>,
 }
 
 impl Button {
-    pub fn with_text(text: Reference<String>, style: Reference<TextStyle>) -> Button {
+    pub fn with_text(text: Ref<String>, style: Ref<TextStyle>) -> Button {
         Button { text: text, style: style, on_click: None }
     }
 
@@ -753,9 +781,9 @@ impl Button {
         self
     }
 
-    pub fn install(self, ui: &mut UI) -> ElementReference {
-        let state = ui.property(ButtonState::Up);
-        let color = ui.property([0.15, 0.18, 0.23, 1.0]);
+    pub fn install(self, ui: &mut UI) -> ElementRef {
+        let state = ui.prop(ButtonState::Up);
+        let color = ui.prop([0.15, 0.18, 0.23, 1.0]);
 
         let text = Text::new(self.text, self.style).install(ui);
         let padding = Padding::new(10.0f32.into()).install(ui, text);
