@@ -16,11 +16,9 @@ extern crate unsafe_any;
 extern crate slab;
 extern crate priority_queue;
 
-use std::rc::Rc;
-
 use glium::glutin;
 
-use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
+use rusttype::{FontCollection, Scale};
 
 use std::sync::mpsc;
 
@@ -91,8 +89,7 @@ fn main() {
 
     let button = Button::with_text(text.into(), style.into())
         .on_click(move |ctx| {
-            let old = *ctx.get(value);
-            ctx.set(value, old + 1);
+            *ctx.get_mut(value) += 1;
             println!("click!")
         })
         .install(&mut ui);
@@ -182,19 +179,19 @@ fn main() {
 
             if response.mouse_cursor == MouseCursor::NoneCursor {
                 if !cursor_hide {
-                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide);
+                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide).expect("could not set cursor state");
                     cursor_hide = true;
                 }
             } else {
                 if cursor_hide {
-                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal);
+                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal).expect("could not set cursor state");
                     cursor_hide = false;
                 }
                 renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
             }
 
             if let Some((x, y)) = response.set_mouse_position {
-                renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32);
+                renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32).expect("could not set cursor state");
             }
 
             renderer.render(ui.display());
@@ -451,8 +448,7 @@ impl IntegerInput {
         ui.listen(text, move |ctx, event| {
             match event {
                 ElementEvent::MousePress(MouseButton::Left) => {
-                    let old = *ctx.get(self.value);
-                    ctx.set(self.value, old + 1);
+                    *ctx.get_mut(self.value) += 1;
                 }
                 // ElementEvent::MouseMove(position) => {
                 //     if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {

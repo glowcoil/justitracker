@@ -1,12 +1,6 @@
-use anymap::AnyMap;
 use unsafe_any::UnsafeAny;
 
-use std::any::{Any, TypeId};
 use std::marker::PhantomData;
-use std::mem;
-use std::borrow::BorrowMut;
-use std::borrow::Cow;
-use std::collections::VecDeque;
 use std::f32;
 
 use std::cell::RefCell;
@@ -16,7 +10,7 @@ use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
 
 use glium::glutin;
-use rusttype::{FontCollection, Font, Scale, point, PositionedGlyph};
+use rusttype::{Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
@@ -99,7 +93,7 @@ impl<A> From<A> for RefOrValue<A> {
 /* element */
 
 pub trait Element {
-    fn layout(&self, context: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, _context: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -110,7 +104,7 @@ pub trait Element {
         (width, height)
     }
 
-    fn display(&self, context: &Context, bounds: BoundingBox, list: &mut DisplayList) {}
+    fn display(&self, _context: &Context, _bounds: BoundingBox, _list: &mut DisplayList) {}
 }
 
 pub struct ChildDelegate<'a> {
@@ -137,7 +131,6 @@ impl<'a> ChildDelegate<'a> {
 
 pub struct Context {
     properties: Slab<Box<UnsafeAny>>,
-    dirty: Slab<bool>,
     dependencies: Slab<Vec<usize>>,
     dependents: Slab<Vec<usize>>,
     update: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>)>>>,
@@ -193,7 +186,6 @@ impl UI {
 
             context: Context {
                 properties: Slab::new(),
-                dirty: Slab::new(),
                 dependencies: Slab::new(),
                 dependents: Slab::new(),
                 update: Slab::new(),
@@ -258,7 +250,6 @@ impl UI {
 
     pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
         let index = self.context.properties.insert(Box::new(value));
-        self.context.dirty.insert(true);
         self.context.dependencies.insert(Vec::new());
         self.context.dependents.insert(Vec::new());
         self.context.update.insert(None);
@@ -270,7 +261,6 @@ impl UI {
         let a = a.into();
         let value = f(self.context.get(a));
         let b = self.prop(value);
-        self.context.dirty[b.index] = false;
         self.context.dependencies[b.index].push(a.index);
         self.context.dependents[a.index].push(b.index);
         self.context.priorities[b.index] = self.context.priorities[a.index] + 1;
@@ -325,7 +315,7 @@ impl UI {
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let mut handler = match event {
+        let handler = match event {
             InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
                 // if let Some(dragging) = self.dragging {
                 //     Some(dragging)
@@ -377,9 +367,6 @@ impl UI {
             },
             InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
                 // self.focus.or(Some(self.root))
-                Some(self.root)
-            }
-            _ => {
                 Some(self.root)
             }
         };
@@ -482,7 +469,7 @@ impl UI {
 
     fn layout(&mut self) {
         let mut root = Self::child_delegate(&self.context, &self.children, &self.elements, self.root);
-        let (width, height) = root.layout(self.width, self.height);
+        root.layout(self.width, self.height);
         Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
@@ -692,7 +679,7 @@ impl Text {
         ui.element(self, &[])
     }
 
-    fn layout_text(&self, text: &str, max_width: f32, max_height: f32, font: &Font<'static>, scale: Scale) -> (f32, f32) {
+    fn layout_text(&self, text: &str, max_width: f32, _max_height: f32, font: &Font<'static>, scale: Scale) -> (f32, f32) {
         use unicode_normalization::UnicodeNormalization;
 
         let mut glyphs = self.glyphs.borrow_mut();
@@ -742,14 +729,14 @@ impl Text {
 }
 
 impl Element for Text {
-    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
         let text = ctx.get(self.text);
         let style = ctx.get(self.style);
 
         self.layout_text(text, max_width, max_height, &style.font, style.scale)
     }
 
-    fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, _ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
             list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
@@ -1041,13 +1028,13 @@ pub enum ElementEvent {
 impl ElementEvent {
     fn from_input_event(event: InputEvent) -> ElementEvent {
         match event {
-            InputEvent::MouseMove(Point) => ElementEvent::MouseMove(Point),
-            InputEvent::MousePress(MouseButton) => ElementEvent::MousePress(MouseButton),
-            InputEvent::MouseRelease(MouseButton) => ElementEvent::MouseRelease(MouseButton),
-            InputEvent::MouseScroll(f32) => ElementEvent::MouseScroll(f32),
-            InputEvent::KeyPress(KeyboardButton) => ElementEvent::KeyPress(KeyboardButton),
-            InputEvent::KeyRelease(KeyboardButton) => ElementEvent::KeyRelease(KeyboardButton),
-            InputEvent::TextInput(char) => ElementEvent::TextInput(char),
+            InputEvent::MouseMove(point) => ElementEvent::MouseMove(point),
+            InputEvent::MousePress(button) => ElementEvent::MousePress(button),
+            InputEvent::MouseRelease(button) => ElementEvent::MouseRelease(button),
+            InputEvent::MouseScroll(delta) => ElementEvent::MouseScroll(delta),
+            InputEvent::KeyPress(button) => ElementEvent::KeyPress(button),
+            InputEvent::KeyRelease(button) => ElementEvent::KeyRelease(button),
+            InputEvent::TextInput(character) => ElementEvent::TextInput(character),
         }
     }
 }
@@ -1439,6 +1426,7 @@ impl KeyboardButton {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum MouseCursor {
     Default,
