@@ -230,8 +230,16 @@ impl<'a> EventContext<'a> {
         self.response.mouse_position = Some(position);
     }
 
-    pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
+    pub fn set_cursor(&mut self, cursor: MouseCursor) {
         self.response.mouse_cursor = Some(cursor);
+    }
+
+    pub fn hide_cursor(&mut self) {
+        self.response.hide_cursor = Some(true);
+    }
+
+    pub fn show_cursor(&mut self) {
+        self.response.hide_cursor = Some(false);
     }
 }
 
@@ -1127,6 +1135,7 @@ impl ElementEvent {
 pub struct UIEventResponse {
     pub mouse_position: Option<Point>,
     pub mouse_cursor: Option<MouseCursor>,
+    pub hide_cursor: Option<bool>,
 }
 
 impl Default for UIEventResponse {
@@ -1134,6 +1143,7 @@ impl Default for UIEventResponse {
         UIEventResponse {
             mouse_position: None,
             mouse_cursor: None,
+            hide_cursor: None,
         }
     }
 }
@@ -1142,6 +1152,7 @@ impl UIEventResponse {
     fn merge(&mut self, other: UIEventResponse) {
         self.mouse_position = self.mouse_position.or(other.mouse_position);
         self.mouse_cursor = self.mouse_cursor.or(other.mouse_cursor);
+        self.hide_cursor = self.hide_cursor.or(other.hide_cursor);
     }
 }
 

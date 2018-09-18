@@ -177,8 +177,16 @@ fn main() {
         if let Some(input_event) = input_event {
             let response = ui.input(input_event);
 
+            if let Some(point) = response.mouse_position {
+                renderer.get_display().gl_window().set_cursor_position(point.x as i32, point.y as i32).expect("could not set cursor state");
+            }
+
             if let Some(mouse_cursor) = response.mouse_cursor {
-                if mouse_cursor == MouseCursor::NoneCursor {
+                renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
+            }
+
+            if let Some(hidden) = response.hide_cursor {
+                if hidden {
                     if !cursor_hide {
                         renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide).expect("could not set cursor state");
                         cursor_hide = true;
@@ -188,12 +196,7 @@ fn main() {
                         renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal).expect("could not set cursor state");
                         cursor_hide = false;
                     }
-                    renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
                 }
-            }
-
-            if let Some(point) = response.mouse_position {
-                renderer.get_display().gl_window().set_cursor_position(point.x as i32, point.y as i32).expect("could not set cursor state");
             }
 
             renderer.render(ui.display());
@@ -451,6 +454,8 @@ impl IntegerInput {
             match event {
                 ElementEvent::MousePress(MouseButton::Left) => {
                     *ctx.get_mut(self.value) += 1;
+                    ctx.capture_mouse(text);
+                    ctx.hide_cursor();
                 }
                 // ElementEvent::MouseMove(position) => {
                 //     if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {
