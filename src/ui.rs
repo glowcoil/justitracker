@@ -64,9 +64,9 @@ pub enum RefOrValue<A> {
 }
 
 impl<A: 'static> RefOrValue<A> {
-    fn get<'a>(&'a self, context: &'a Context) -> &'a A {
+    fn get<'a, C: GetProperty>(&'a self, context: &'a C) -> &'a A {
         match *self {
-            RefOrValue::Ref(reference) => &*unsafe { context.properties[reference.index].downcast_ref_unchecked() },
+            RefOrValue::Ref(reference) => context.get(reference),
             RefOrValue::Value(ref value) => value,
         }
     }
@@ -93,7 +93,7 @@ impl<A> From<A> for RefOrValue<A> {
 /* element */
 
 pub trait Element {
-    fn layout(&self, _context: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, _context: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -104,7 +104,7 @@ pub trait Element {
         (width, height)
     }
 
-    fn display(&self, _context: &Context, _bounds: BoundingBox, _list: &mut DisplayList) {}
+    fn display(&self, _context: &ElementContext, _bounds: BoundingBox, _list: &mut DisplayList) {}
 }
 
 pub struct ChildDelegate<'a> {
@@ -117,7 +117,7 @@ pub struct ChildDelegate<'a> {
 
 impl<'a> ChildDelegate<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        let (width, height) = self.element.layout(self.context, max_width, max_height, &mut self.children);
+        let (width, height) = self.element.layout(&ElementContext(self.context), max_width, max_height, &mut self.children);
         self.bounds.size.x = width;
         self.bounds.size.y = height;
         (width, height)
@@ -139,6 +139,17 @@ pub struct Context {
 }
 
 impl Context {
+    fn new() -> Context {
+        Context {
+            properties: Slab::new(),
+            dependencies: Slab::new(),
+            dependents: Slab::new(),
+            update: Slab::new(),
+            priorities: Slab::new(),
+            queue: PriorityQueue::new(),
+        }
+    }
+
     pub fn get<'a, A: 'static, R: Into<Ref<A>>>(&'a self, reference: R) -> &'a A {
         Context::get_prop(&self.properties, reference.into())
     }
@@ -158,6 +169,94 @@ impl Context {
     }
 }
 
+pub struct ElementContext<'a>(&'a Context);
+
+impl<'a> ElementContext<'a> {
+    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+        self.0.get(reference)
+    }
+}
+
+pub struct EventContext<'a> {
+    context: &'a mut Context,
+    focus: &'a mut Option<ElementRef>,
+    mouse_focus: &'a mut Option<ElementRef>,
+    response: UIEventResponse,
+}
+
+impl<'a> EventContext<'a> {
+    fn new<'b>(context: &'b mut Context, focus: &'b mut Option<ElementRef>, mouse_focus: &'b mut Option<ElementRef>) -> EventContext<'b> {
+        EventContext {
+            context: context,
+            focus: focus,
+            mouse_focus: mouse_focus,
+            response: UIEventResponse::default(),
+        }
+    }
+
+    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+        self.context.get(reference)
+    }
+
+    pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
+        self.context.get_mut(prop)
+    }
+
+    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
+        self.context.set(prop, value)
+    }
+
+    pub fn focus(&mut self, element: ElementRef) {
+        *self.focus = Some(element);
+    }
+
+    pub fn defocus(&mut self, element: ElementRef) {
+        if *self.focus == Some(element) {
+            *self.focus = None;
+        }
+    }
+
+    pub fn capture_mouse(&mut self, element: ElementRef) {
+        *self.mouse_focus = Some(element);
+    }
+
+    pub fn relinquish_mouse(&mut self, element: ElementRef) {
+        if *self.mouse_focus == Some(element) {
+            *self.mouse_focus = None;
+        }
+    }
+
+    pub fn set_mouse_position(&mut self, position: Point) {
+        self.response.mouse_position = Some(position);
+    }
+
+    pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
+        self.response.mouse_cursor = Some(cursor);
+    }
+}
+
+pub trait GetProperty {
+    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A;
+}
+
+impl GetProperty for Context {
+    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+        self.get(reference)
+    }
+}
+
+impl<'b> GetProperty for ElementContext<'b> {
+    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+        self.get(reference)
+    }
+}
+
+impl<'b> GetProperty for EventContext<'b> {
+    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+        self.get(reference)
+    }
+}
+
 /* ui */
 
 pub struct UI {
@@ -171,10 +270,11 @@ pub struct UI {
     parents: Slab<Option<ElementRef>>,
     children: Slab<Vec<ElementRef>>,
     layout: Slab<BoundingBox>,
-    listeners: Slab<Option<Box<Fn(&mut Context, ElementEvent)>>>,
+    listeners: Slab<Option<Box<Fn(&mut EventContext, ElementEvent)>>>,
 
     under_cursor: Vec<ElementRef>,
-
+    focus: Option<ElementRef>,
+    mouse_focus: Option<ElementRef>,
     input_state: InputState,
 }
 
@@ -184,14 +284,7 @@ impl UI {
             width: width,
             height: height,
 
-            context: Context {
-                properties: Slab::new(),
-                dependencies: Slab::new(),
-                dependents: Slab::new(),
-                update: Slab::new(),
-                priorities: Slab::new(),
-                queue: PriorityQueue::new(),
-            },
+            context: Context::new(),
 
             root: ElementRef(0),
             elements: Slab::new(),
@@ -201,7 +294,8 @@ impl UI {
             listeners: Slab::new(),
 
             under_cursor: Vec::new(),
-
+            focus: None,
+            mouse_focus: None,
             input_state: InputState::default(),
         };
 
@@ -244,7 +338,7 @@ impl UI {
         element
     }
 
-    pub fn listen<F: Fn(&mut Context, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
+    pub fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
         self.listeners[element.0] = Some(Box::new(listener));
     }
 
@@ -286,7 +380,6 @@ impl UI {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = true;
-                        self.input_state.mouse_drag_origin = Some(self.input_state.mouse_position);
                     }
                     MouseButton::Middle => {
                         self.input_state.mouse_middle_pressed = true;
@@ -300,7 +393,6 @@ impl UI {
                 match button {
                     MouseButton::Left => {
                         self.input_state.mouse_left_pressed = false;
-                        self.input_state.mouse_drag_origin = None;
                     }
                     MouseButton::Middle => {
                         self.input_state.mouse_middle_pressed = false;
@@ -317,31 +409,34 @@ impl UI {
 
         let handler = match event {
             InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
-                // if let Some(dragging) = self.dragging {
-                //     Some(dragging)
-                // } else {
-                    let position = self.input_state.mouse_drag_origin.unwrap_or(self.input_state.mouse_position);
+                if self.mouse_focus.is_some() {
+                    self.mouse_focus
+                } else {
                     let mut i = 0;
-                    let handler = if self.layout[self.root.0].contains_point(position) {
+                    let handler = if self.layout[self.root.0].contains_point(self.input_state.mouse_position) {
                         let mut element = self.root;
                         loop {
                             if i < self.under_cursor.len() {
                                 if element != self.under_cursor[i] {
                                     let mut old_under_cursor = self.under_cursor.split_off(i);
                                     for child in old_under_cursor {
-                                        self.fire_event(child, ElementEvent::MouseLeave);
+                                        if let Some(response) = self.fire_event(child, ElementEvent::MouseLeave) {
+                                            ui_response.merge(response);
+                                        }
                                     }
                                 }
                             }
                             if i >= self.under_cursor.len() {
                                 self.under_cursor.push(element);
-                                self.fire_event(element, ElementEvent::MouseEnter);
+                                if let Some(response) = self.fire_event(element, ElementEvent::MouseEnter) {
+                                    ui_response.merge(response);
+                                }
                             }
                             i += 1;
 
                             let mut found = false;
                             for child in self.children[element.0].iter() {
-                                if self.layout[child.0].contains_point(position) {
+                                if self.layout[child.0].contains_point(self.input_state.mouse_position) {
                                     element = *child;
                                     found = true;
                                     break;
@@ -359,58 +454,23 @@ impl UI {
 
                     let mut old_under_cursor = self.under_cursor.split_off(i);
                     for child in old_under_cursor {
-                        self.fire_event(child, ElementEvent::MouseLeave);
+                        if let Some(response) = self.fire_event(child, ElementEvent::MouseLeave) {
+                            ui_response.merge(response);
+                        }
                     }
 
                     handler
-                // }
+                }
             },
             InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
-                // self.focus.or(Some(self.root))
-                Some(self.root)
+                self.focus.or(Some(self.root))
             }
         };
 
         if let Some(handler) = handler {
-            self.bubble_event(handler, ElementEvent::from_input_event(event));
-        }
-
-        // if response.capture_keyboard {
-        //     if let Some(ref focus) = self.keyboard_focus {
-        //         focus.borrow_mut().handle_event(InputEvent::LostKeyboardFocus, self.input_state);
-        //     }
-        //     if let Some(ref responder) = response.responder {
-        //         self.keyboard_focus = Some(responder.clone());
-        //     }
-        // }
-        // if response.capture_mouse {
-        //     if let Some(ref responder) = response.responder {
-        //         self.mouse_focus = Some(responder.clone());
-        //     }
-        // }
-        // if response.capture_mouse_position {
-        //     self.mouse_position_captured = true;
-        // }
-        // if self.mouse_position_captured {
-        //     if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
-        //         ui_response.set_mouse_position = Some((mouse_drag_origin.x, mouse_drag_origin.y));
-        //     }
-        // }
-        // ui_response.mouse_cursor = response.mouse_cursor;
-
-        match event {
-            InputEvent::MouseRelease(MouseButton::Left) => {
-                // if self.mouse_position_captured {
-                //     if let Some(mouse_drag_origin) = self.input_state.mouse_drag_origin {
-                //         self.input_state.mouse_position = mouse_drag_origin;
-                //     }
-                //     self.mouse_position_captured = false;
-                // }
-
-                self.input_state.mouse_drag_origin = None;
-                // self.mouse_focus = None;
+            if let Some(response) = self.bubble_event(handler, ElementEvent::from_input_event(event)) {
+                ui_response.merge(response);
             }
-            _ => {}
         }
 
         self.update();
@@ -419,23 +479,27 @@ impl UI {
         ui_response
     }
 
-    fn bubble_event(&mut self, element: ElementRef, event: ElementEvent) {
+    fn bubble_event(&mut self, element: ElementRef, event: ElementEvent) -> Option<UIEventResponse> {
         let mut handler = Some(element);
+        let mut response = None;
         while let Some(element) = handler {
-            if self.fire_event(element, event) {
+            response = self.fire_event(element, event);
+            if response.is_some() {
                 break;
             } else {
                 handler = self.parents[element.0];
             }
         }
+        response
     }
 
-    fn fire_event(&mut self, element: ElementRef, event: ElementEvent) -> bool {
+    fn fire_event(&mut self, element: ElementRef, event: ElementEvent) -> Option<UIEventResponse> {
         if let Some(ref callback) = self.listeners[element.0] {
-            callback(&mut self.context, event);
-            true
+            let mut context = EventContext::new(&mut self.context, &mut self.focus, &mut self.mouse_focus);
+            callback(&mut context, event);
+            Some(context.response)
         } else {
-            false
+            None
         }
     }
 
@@ -459,7 +523,7 @@ impl UI {
     }
 
     fn display_element(&self, element: ElementRef, list: &mut DisplayList) {
-        self.elements[element.0].display(&self.context, self.layout[element.0], list);
+        self.elements[element.0].display(&ElementContext(&self.context), self.layout[element.0], list);
         for child in self.children[element.0].iter() {
             self.display_element(*child, list);
         }
@@ -499,6 +563,26 @@ impl UI {
     }
 }
 
+struct InputState {
+    mouse_position: Point,
+    mouse_left_pressed: bool,
+    mouse_middle_pressed: bool,
+    mouse_right_pressed: bool,
+    modifiers: KeyboardModifiers,
+}
+
+impl Default for InputState {
+    fn default() -> InputState {
+        InputState {
+            mouse_position: Point { x: -1.0, y: -1.0 },
+            mouse_left_pressed: false,
+            mouse_middle_pressed: false,
+            mouse_right_pressed: false,
+            modifiers: KeyboardModifiers::default(),
+        }
+    }
+}
+
 
 pub struct Empty;
 
@@ -530,7 +614,7 @@ impl BackgroundColor {
 }
 
 impl Element for BackgroundColor {
-    fn display(&self, ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, ctx: &ElementContext, bounds: BoundingBox, list: &mut DisplayList) {
         list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *self.color.get(ctx) });
     }
 }
@@ -551,7 +635,7 @@ impl Container {
 }
 
 impl Element for Container {
-    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let (self_max_width, self_max_height) = *self.max_size.get(ctx);
         let max_width = self_max_width.min(max_width);
         let max_height = self_max_height.min(max_height);
@@ -584,7 +668,7 @@ impl Padding {
 }
 
 impl Element for Padding {
-    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let padding = *self.padding.get(ctx);
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -614,7 +698,7 @@ impl Row {
 }
 
 impl Element for Row {
-    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let spacing = *self.spacing.get(ctx);
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -644,7 +728,7 @@ impl Column {
 }
 
 impl Element for Column {
-    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let spacing = *self.spacing.get(ctx);
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
@@ -729,14 +813,14 @@ impl Text {
 }
 
 impl Element for Text {
-    fn layout(&self, ctx: &Context, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
         let text = ctx.get(self.text);
         let style = ctx.get(self.style);
 
         self.layout_text(text, max_width, max_height, &style.font, style.scale)
     }
 
-    fn display(&self, _ctx: &Context, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, _ctx: &ElementContext, bounds: BoundingBox, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
             list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
@@ -755,7 +839,7 @@ enum ButtonState {
 pub struct Button {
     text: Ref<String>,
     style: Ref<TextStyle>,
-    on_click: Option<Box<Fn(&mut Context)>>,
+    on_click: Option<Box<Fn(&mut EventContext)>>,
 }
 
 impl Button {
@@ -763,7 +847,7 @@ impl Button {
         Button { text: text, style: style, on_click: None }
     }
 
-    pub fn on_click<F: Fn(&mut Context) + 'static>(mut self, on_click: F) -> Button {
+    pub fn on_click<F: Fn(&mut EventContext) + 'static>(mut self, on_click: F) -> Button {
         self.on_click = Some(Box::new(on_click));
         self
     }
@@ -1041,40 +1125,23 @@ impl ElementEvent {
 
 #[derive(Copy, Clone)]
 pub struct UIEventResponse {
-    pub set_mouse_position: Option<(f32, f32)>,
-    pub mouse_cursor: MouseCursor,
+    pub mouse_position: Option<Point>,
+    pub mouse_cursor: Option<MouseCursor>,
 }
 
 impl Default for UIEventResponse {
     fn default() -> UIEventResponse {
         UIEventResponse {
-            set_mouse_position: None,
-            mouse_cursor: MouseCursor::Default,
+            mouse_position: None,
+            mouse_cursor: None,
         }
     }
 }
 
-
-#[derive(Copy, Clone)]
-pub struct InputState {
-    pub mouse_position: Point,
-    pub mouse_drag_origin: Option<Point>,
-    pub mouse_left_pressed: bool,
-    pub mouse_middle_pressed: bool,
-    pub mouse_right_pressed: bool,
-    pub modifiers: KeyboardModifiers,
-}
-
-impl Default for InputState {
-    fn default() -> InputState {
-        InputState {
-            mouse_position: Point { x: -1.0, y: -1.0 },
-            mouse_drag_origin: None,
-            mouse_left_pressed: false,
-            mouse_middle_pressed: false,
-            mouse_right_pressed: false,
-            modifiers: KeyboardModifiers::default(),
-        }
+impl UIEventResponse {
+    fn merge(&mut self, other: UIEventResponse) {
+        self.mouse_position = self.mouse_position.or(other.mouse_position);
+        self.mouse_cursor = self.mouse_cursor.or(other.mouse_cursor);
     }
 }
 

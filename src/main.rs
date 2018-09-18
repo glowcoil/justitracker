@@ -177,21 +177,23 @@ fn main() {
         if let Some(input_event) = input_event {
             let response = ui.input(input_event);
 
-            if response.mouse_cursor == MouseCursor::NoneCursor {
-                if !cursor_hide {
-                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide).expect("could not set cursor state");
-                    cursor_hide = true;
+            if let Some(mouse_cursor) = response.mouse_cursor {
+                if mouse_cursor == MouseCursor::NoneCursor {
+                    if !cursor_hide {
+                        renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide).expect("could not set cursor state");
+                        cursor_hide = true;
+                    }
+                } else {
+                    if cursor_hide {
+                        renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal).expect("could not set cursor state");
+                        cursor_hide = false;
+                    }
+                    renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
                 }
-            } else {
-                if cursor_hide {
-                    renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal).expect("could not set cursor state");
-                    cursor_hide = false;
-                }
-                renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(response.mouse_cursor));
             }
 
-            if let Some((x, y)) = response.set_mouse_position {
-                renderer.get_display().gl_window().set_cursor_position(x as i32, y as i32).expect("could not set cursor state");
+            if let Some(point) = response.mouse_position {
+                renderer.get_display().gl_window().set_cursor_position(point.x as i32, point.y as i32).expect("could not set cursor state");
             }
 
             renderer.render(ui.display());
