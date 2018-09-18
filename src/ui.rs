@@ -179,15 +179,17 @@ impl<'a> ElementContext<'a> {
 
 pub struct EventContext<'a> {
     context: &'a mut Context,
+    input_state: &'a InputState,
     focus: &'a mut Option<ElementRef>,
     mouse_focus: &'a mut Option<ElementRef>,
     response: UIEventResponse,
 }
 
 impl<'a> EventContext<'a> {
-    fn new<'b>(context: &'b mut Context, focus: &'b mut Option<ElementRef>, mouse_focus: &'b mut Option<ElementRef>) -> EventContext<'b> {
+    fn new<'b>(context: &'b mut Context, input_state: &'b InputState, focus: &'b mut Option<ElementRef>, mouse_focus: &'b mut Option<ElementRef>) -> EventContext<'b> {
         EventContext {
             context: context,
+            input_state: input_state,
             focus: focus,
             mouse_focus: mouse_focus,
             response: UIEventResponse::default(),
@@ -224,6 +226,10 @@ impl<'a> EventContext<'a> {
         if *self.mouse_focus == Some(element) {
             *self.mouse_focus = None;
         }
+    }
+
+    pub fn get_mouse_position(&mut self) -> Point {
+        self.input_state.mouse_position
     }
 
     pub fn set_mouse_position(&mut self, position: Point) {
@@ -503,7 +509,7 @@ impl UI {
 
     fn fire_event(&mut self, element: ElementRef, event: ElementEvent) -> Option<UIEventResponse> {
         if let Some(ref callback) = self.listeners[element.0] {
-            let mut context = EventContext::new(&mut self.context, &mut self.focus, &mut self.mouse_focus);
+            let mut context = EventContext::new(&mut self.context, &self.input_state, &mut self.focus, &mut self.mouse_focus);
             callback(&mut context, event);
             Some(context.response)
         } else {

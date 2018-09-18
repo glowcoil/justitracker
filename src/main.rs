@@ -448,84 +448,41 @@ impl IntegerInput {
     }
 
     fn install(self, ui: &mut UI) -> ElementRef {
+        let old_value = ui.prop(None);
+        let drag_origin = ui.prop(None);
+
         let string = ui.map(self.value, |value| value.to_string());
         let text = Text::new(string, self.style).install(ui);
         ui.listen(text, move |ctx, event| {
             match event {
                 ElementEvent::MousePress(MouseButton::Left) => {
-                    *ctx.get_mut(self.value) += 1;
                     ctx.capture_mouse(text);
                     ctx.hide_cursor();
+
+                    let value = *ctx.get(self.value);
+                    ctx.set(old_value, Some(value));
+                    let mouse_position = ctx.get_mouse_position();
+                    ctx.set(drag_origin, Some(mouse_position));
                 }
-                // ElementEvent::MouseMove(position) => {
-                //     if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {
-                //         if self.old_value.is_none() {
-                //             self.old_value = Some(self.value);
-                //         }
-                //         let dy = -(ctx.get_input_state().mouse_position.y - mouse_drag_origin.y);
-                //         ctx.fire::<i32>(self.old_value.unwrap() + (dy / 8.0) as i32);
-                //     }
-                // }
-                // ElementEvent::MouseRelease(MouseButton::Left) => {
-                //     self.old_value = None;
-                // }
+                ElementEvent::MouseMove(position) => {
+                    if let Some(drag_origin) = *ctx.get(drag_origin) {
+                        *ctx.get_mut(self.value) -= ((position.y - drag_origin.y) / 8.0) as i32;
+                        ctx.set_mouse_position(drag_origin);
+                    }
+                }
+                ElementEvent::MouseRelease(MouseButton::Left) => {
+                    ctx.relinquish_mouse(text);
+                    ctx.show_cursor();
+
+                    ctx.set(old_value, None);
+                    ctx.set(drag_origin, None);
+                }
                 _ => {}
             }
         });
         text
     }
 }
-
-// struct IntegerInput {
-//     value: i32,
-//     old_value: Option<i32>,
-// }
-
-// impl IntegerInput {
-//     fn with_value(value: i32) -> impl FnOnce(Context<IntegerInput>) -> IntegerInput {
-//         move |mut ctx| {
-//             ctx.subtree().add_child(Label::with_text(IntegerInput::format(value)));
-
-//             let id = ctx.get_self();
-//             ctx.listen(id, IntegerInput::handle);
-
-//             ctx.receive(|myself: &mut IntegerInput, mut ctx: Context<IntegerInput>, value: i32| {
-//                 myself.value = value;
-//                 let label = ctx.subtree().get_child(0).unwrap();
-//                 ctx.send::<String>(label, IntegerInput::format(value));
-//             });
-
-//             IntegerInput {
-//                 value: value,
-//                 old_value: None,
-//             }
-//         }
-//     }
-
-//     fn format(value: i32) -> String {
-//         format!("{:02}", value)
-//     }
-
-//     fn handle(&mut self, mut ctx: Context<IntegerInput>, evt: InputEvent) {
-//         match evt {
-//             InputEvent::CursorMoved { position } => {
-//                 if let Some(mouse_drag_origin) = ctx.get_input_state().mouse_drag_origin {
-//                     if self.old_value.is_none() {
-//                         self.old_value = Some(self.value);
-//                     }
-//                     let dy = -(ctx.get_input_state().mouse_position.y - mouse_drag_origin.y);
-//                     ctx.fire::<i32>(self.old_value.unwrap() + (dy / 8.0) as i32);
-//                 }
-//             }
-//             InputEvent::MouseRelease { button: MouseButton::Left } => {
-//                 self.old_value = None;
-//             }
-//             _ => {}
-//         }
-//     }
-// }
-
-// impl Element for IntegerInput {}
 
 
 // struct NoteElement {
