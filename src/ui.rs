@@ -868,7 +868,13 @@ impl Button {
 
     pub fn install(self, ui: &mut UI) -> ElementRef {
         let state = ui.prop(ButtonState::Up);
-        let color = ui.prop([0.15, 0.18, 0.23, 1.0]);
+        let color = ui.map(state, |state| {
+            match state {
+                ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
+                ButtonState::Hover => [0.3, 0.4, 0.5, 1.0],
+                ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
+            }
+        });
 
         let text = self.text;
         let style = self.style;
@@ -881,19 +887,16 @@ impl Button {
             match event {
                 ElementEvent::MouseEnter => {
                     ctx.set(state, ButtonState::Hover);
-                    ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
                 }
                 ElementEvent::MouseLeave => {
                     ctx.set(state, ButtonState::Up);
-                    ctx.set(color, [0.15, 0.18, 0.23, 1.0])
                 }
                 ElementEvent::MousePress(MouseButton::Left) => {
                     ctx.set(state, ButtonState::Down);
-                    ctx.set(color, [0.02, 0.2, 0.6, 1.0]);
                 }
                 ElementEvent::MouseRelease(MouseButton::Left) => {
                     if *ctx.get(state) == ButtonState::Down {
-                        ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
+                        ctx.set(state, ButtonState::Hover);
                         if let Some(ref on_click) = on_click {
                             on_click(ctx);
                         }

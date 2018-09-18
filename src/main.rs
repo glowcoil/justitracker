@@ -440,11 +440,17 @@ fn main() {
 struct IntegerInput {
     value: Prop<i32>,
     style: Ref<TextStyle>,
+    on_change: Option<Box<Fn(&mut EventContext)>>,
 }
 
 impl IntegerInput {
     fn new(value: Prop<i32>, style: Ref<TextStyle>) -> IntegerInput {
-        IntegerInput { value: value, style: style }
+        IntegerInput { value: value, style: style, on_change: None }
+    }
+
+    pub fn on_change<F: Fn(&mut EventContext) + 'static>(mut self, on_change: F) -> IntegerInput {
+        self.on_change = Some(Box::new(on_change));
+        self
     }
 
     fn install(self, ui: &mut UI) -> ElementRef {
@@ -468,6 +474,10 @@ impl IntegerInput {
                     if let Some(drag_origin) = *ctx.get(drag_origin) {
                         *ctx.get_mut(self.value) -= ((position.y - drag_origin.y) / 8.0) as i32;
                         ctx.set_mouse_position(drag_origin);
+
+                        if let Some(ref on_change) = self.on_change {
+                            on_change(ctx);
+                        }
                     }
                 }
                 ElementEvent::MouseRelease(MouseButton::Left) => {
