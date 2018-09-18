@@ -452,7 +452,7 @@ impl IntegerInput {
         let drag_origin = ui.prop(None);
 
         let string = ui.map(self.value, |value| value.to_string());
-        let text = Text::new(string, self.style).install(ui);
+        let text = Text::new(string.into(), self.style).install(ui);
         ui.listen(text, move |ctx, event| {
             match event {
                 ElementEvent::MousePress(MouseButton::Left) => {

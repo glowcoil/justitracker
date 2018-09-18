@@ -763,13 +763,13 @@ pub struct TextStyle {
 }
 
 pub struct Text {
-    text: Ref<String>,
+    text: RefOrValue<String>,
     style: Ref<TextStyle>,
     glyphs: RefCell<Vec<PositionedGlyph<'static>>>,
 }
 
 impl Text {
-    pub fn new(text: Ref<String>, style: Ref<TextStyle>) -> Text {
+    pub fn new(text: RefOrValue<String>, style: Ref<TextStyle>) -> Text {
         Text { text: text, style: style, glyphs: RefCell::new(Vec::new()) }
     }
 
@@ -828,7 +828,7 @@ impl Text {
 
 impl Element for Text {
     fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
-        let text = ctx.get(self.text);
+        let text = self.text.get(ctx);
         let style = ctx.get(self.style);
 
         self.layout_text(text, max_width, max_height, &style.font, style.scale)
@@ -851,13 +851,13 @@ enum ButtonState {
 }
 
 pub struct Button {
-    text: Ref<String>,
+    text: RefOrValue<String>,
     style: Ref<TextStyle>,
     on_click: Option<Box<Fn(&mut EventContext)>>,
 }
 
 impl Button {
-    pub fn with_text(text: Ref<String>, style: Ref<TextStyle>) -> Button {
+    pub fn with_text(text: RefOrValue<String>, style: Ref<TextStyle>) -> Button {
         Button { text: text, style: style, on_click: None }
     }
 
@@ -870,7 +870,11 @@ impl Button {
         let state = ui.prop(ButtonState::Up);
         let color = ui.prop([0.15, 0.18, 0.23, 1.0]);
 
-        let text = Text::new(self.text, self.style).install(ui);
+        let text = self.text;
+        let style = self.style;
+        let on_click = self.on_click;
+
+        let text = Text::new(text, style).install(ui);
         let padding = Padding::new(10.0f32.into()).install(ui, text);
         let button = BackgroundColor::new(color.into()).install(ui, padding);
         ui.listen(button, move |ctx, event| {
@@ -890,7 +894,7 @@ impl Button {
                 ElementEvent::MouseRelease(MouseButton::Left) => {
                     if *ctx.get(state) == ButtonState::Down {
                         ctx.set(color, [0.3, 0.4, 0.5, 1.0]);
-                        if let Some(ref on_click) = self.on_click {
+                        if let Some(ref on_click) = on_click {
                             on_click(ctx);
                         }
                     }
