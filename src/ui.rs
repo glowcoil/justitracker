@@ -3,6 +3,7 @@ use unsafe_any::UnsafeAny;
 use std::marker::PhantomData;
 use std::f32;
 
+use std::rc::Rc;
 use std::cell::RefCell;
 
 use slab::Slab;
@@ -249,6 +250,42 @@ impl<'a> EventContext<'a> {
     }
 }
 
+pub struct TreeContext<'a>(&'a mut UI);
+
+impl<'a> TreeContext<'a> {
+    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+        self.0.context.get(reference)
+    }
+
+    pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
+        self.0.context.get_mut(prop)
+    }
+
+    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
+        self.0.context.set(prop, value)
+    }
+
+    pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
+        self.0.element(element, children)
+    }
+
+    pub fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
+        self.0.tree(f)
+    }
+
+    pub fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
+        self.0.listen(element, listener)
+    }
+
+    pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+        self.0.prop(value)
+    }
+
+    pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+        self.0.map(a, f)
+    }
+}
+
 pub trait GetProperty {
     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A;
 }
@@ -271,6 +308,56 @@ impl<'b> GetProperty for EventContext<'b> {
     }
 }
 
+impl<'b> GetProperty for TreeContext<'b> {
+    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+        self.get(reference)
+    }
+}
+
+pub trait Install {
+    fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef;
+    fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef;
+    fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F);
+    fn prop<A: 'static>(&mut self, value: A) -> Prop<A>;
+    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static;
+}
+
+impl Install for UI {
+    fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
+        self.element(element, children)
+    }
+    fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
+        self.tree(f)
+    }
+    fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
+        self.listen(element, listener);
+    }
+    fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+        self.prop(value)
+    }
+    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+        self.map(a, f)
+    }
+}
+
+impl<'b> Install for TreeContext<'b> {
+    fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
+        self.element(element, children)
+    }
+    fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
+        self.tree(f)
+    }
+    fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
+        self.listen(element, listener);
+    }
+    fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+        self.prop(value)
+    }
+    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+        self.map(a, f)
+    }
+}
+
 /* ui */
 
 pub struct UI {
@@ -285,6 +372,9 @@ pub struct UI {
     children: Slab<Vec<ElementRef>>,
     layout: Slab<BoundingBox>,
     listeners: Slab<Option<Box<Fn(&mut EventContext, ElementEvent)>>>,
+
+    dynamics: Slab<Rc<Fn(&mut TreeContext) -> ElementRef>>,
+    dynamic_indices: Slab<ElementRef>,
 
     under_cursor: Vec<ElementRef>,
     focus: Option<ElementRef>,
@@ -306,6 +396,9 @@ impl UI {
             children: Slab::new(),
             layout: Slab::new(),
             listeners: Slab::new(),
+
+            dynamics: Slab::new(),
+            dynamic_indices: Slab::new(),
 
             under_cursor: Vec::new(),
             focus: None,
@@ -349,6 +442,13 @@ impl UI {
         }
         self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
         self.listeners.insert(None);
+        element
+    }
+
+    pub fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
+        let element = self.element(Empty, &[]);
+        self.dynamics.insert(Rc::new(f));
+        self.dynamic_indices.insert(element);
         element
     }
 
@@ -487,9 +587,6 @@ impl UI {
             }
         }
 
-        self.update();
-        self.layout();
-
         ui_response
     }
 
@@ -517,7 +614,7 @@ impl UI {
         }
     }
 
-    fn update(&mut self) {
+    pub fn update(&mut self) {
         while let Some((index, _)) = self.context.queue.pop() {
             if let Some(ref update) = self.context.update[index] {
                 update(&mut self.context.properties);
@@ -526,6 +623,11 @@ impl UI {
                 self.context.queue.push(*dependent, Reverse(self.context.priorities[*dependent]));
             }
         }
+        for i in 0..self.dynamics.len() {
+            let f = self.dynamics[i].clone();
+            self.children[self.dynamic_indices[i].0] = vec![f(&mut TreeContext(self))];
+        }
+        self.layout();
     }
 
     /* display */
@@ -605,7 +707,7 @@ impl Empty {
         Empty
     }
 
-    pub fn install(self, ui: &mut UI) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install) -> ElementRef {
         ui.element(self, &[])
     }
 }
@@ -622,7 +724,7 @@ impl BackgroundColor {
         BackgroundColor { color: color }
     }
 
-    pub fn install(self, ui: &mut UI, child: ElementRef) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
         ui.element(self, &[child])
     }
 }
@@ -643,7 +745,7 @@ impl Container {
         Container { max_size: max_size }
     }
 
-    pub fn install(self, ui: &mut UI, child: ElementRef) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
         ui.element(self, &[child])
     }
 }
@@ -676,7 +778,7 @@ impl Padding {
         Padding { padding: padding }
     }
 
-    pub fn install(self, ui: &mut UI, child: ElementRef) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
         ui.element(self, &[child])
     }
 }
@@ -706,7 +808,7 @@ impl Row {
         Row { spacing: spacing }
     }
 
-    pub fn install(self, ui: &mut UI, children: &[ElementRef]) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install, children: &[ElementRef]) -> ElementRef {
         ui.element(self, children)
     }
 }
@@ -727,21 +829,21 @@ impl Element for Row {
 }
 
 
-pub struct Column {
+pub struct Col {
     spacing: RefOrValue<f32>,
 }
 
-impl Column {
-    pub fn new(spacing: RefOrValue<f32>) -> Column {
-        Column { spacing: spacing }
+impl Col {
+    pub fn new(spacing: RefOrValue<f32>) -> Col {
+        Col { spacing: spacing }
     }
 
-    pub fn install(self, ui: &mut UI, children: &[ElementRef]) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install, children: &[ElementRef]) -> ElementRef {
         ui.element(self, children)
     }
 }
 
-impl Element for Column {
+impl Element for Col {
     fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let spacing = *self.spacing.get(ctx);
         let mut width: f32 = 0.0;
@@ -773,7 +875,7 @@ impl Text {
         Text { text: text, style: style, glyphs: RefCell::new(Vec::new()) }
     }
 
-    pub fn install(self, ui: &mut UI) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install) -> ElementRef {
         ui.element(self, &[])
     }
 
@@ -866,7 +968,7 @@ impl Button {
         self
     }
 
-    pub fn install(self, ui: &mut UI) -> ElementRef {
+    pub fn install(self, ui: &mut impl Install) -> ElementRef {
         let state = ui.prop(ButtonState::Up);
         let color = ui.map(state, |state| {
             match state {
@@ -881,6 +983,7 @@ impl Button {
         let on_click = self.on_click;
 
         let text = Text::new(text, style).install(ui);
+
         let padding = Padding::new(10.0f32.into()).install(ui, text);
         let button = BackgroundColor::new(color.into()).install(ui, padding);
         ui.listen(button, move |ctx, event| {

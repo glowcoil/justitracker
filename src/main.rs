@@ -166,7 +166,12 @@ fn main() {
         // }
     });
 
-    ui.root(controls);
+    let tree = ui.tree(move |ctx| {
+        let text = Text::new("asdf".to_string().into(), style.into()).install(ctx);
+        Col::new(5.0.into()).install(ctx, &[controls, text])
+    });
+
+    ui.root(tree);
 
     // let root = ctx.subtree().add_child(Stack::install);
 
@@ -309,7 +314,7 @@ fn main() {
     // }
 
 
-
+    ui.update();
     renderer.render(ui.display());
 
     let mut cursor_hide = false;
@@ -401,6 +406,8 @@ fn main() {
                 }
             }
 
+            ui.update();
+
             renderer.render(ui.display());
         }
 
@@ -425,7 +432,7 @@ impl IntegerInput {
         self
     }
 
-    fn install(self, ui: &mut UI) -> ElementRef {
+    fn install(self, ui: &mut impl Install) -> ElementRef {
         let old_value = ui.prop(None);
         let drag_origin = ui.prop(None);
 
