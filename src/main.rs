@@ -433,7 +433,8 @@ impl IntegerInput {
     }
 
     fn install(self, ui: &mut impl Install) -> ElementRef {
-        let old_value = ui.prop(None);
+        let old = ui.prop(None);
+        let delta = ui.prop(None);
         let drag_origin = ui.prop(None);
 
         let string = ui.map(self.value, |value| value.to_string());
@@ -445,13 +446,17 @@ impl IntegerInput {
                     ctx.hide_cursor();
 
                     let value = *ctx.get(self.value);
-                    ctx.set(old_value, Some(value));
+                    ctx.set(old, Some(value));
+                    ctx.set(delta, Some(0.0));
                     let mouse_position = ctx.get_mouse_position();
                     ctx.set(drag_origin, Some(mouse_position));
                 }
                 ElementEvent::MouseMove(position) => {
                     if let Some(drag_origin) = *ctx.get(drag_origin) {
-                        *ctx.get_mut(self.value) -= ((position.y - drag_origin.y) / 8.0) as i32;
+                        let old_value = ctx.get(old).unwrap();
+                        let delta_value = ctx.get(delta).unwrap() - (position.y - drag_origin.y) / 8.0;
+                        ctx.set(delta, Some(delta_value));
+                        ctx.set(self.value, (old_value as f32 + delta_value) as i32);
                         ctx.set_mouse_position(drag_origin);
 
                         if let Some(ref on_change) = self.on_change {
@@ -464,7 +469,8 @@ impl IntegerInput {
                     ctx.relinquish_mouse(text);
                     ctx.show_cursor();
 
-                    ctx.set(old_value, None);
+                    ctx.set(old, None);
+                    ctx.set(delta, None);
                     ctx.set(drag_origin, None);
                 }
                 _ => {}
