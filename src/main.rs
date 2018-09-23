@@ -36,7 +36,7 @@ enum Message {
 #[derive(Clone)]
 pub struct Song {
     bpm: u32,
-    ptn_length: usize,
+    ptn_len: usize,
     samples: Vec<Vec<f32>>,
     notes: Vec<Vec<Note>>,
 }
@@ -52,7 +52,7 @@ impl Default for Song {
     fn default() -> Song {
         Song {
             bpm: 120,
-            ptn_length: 8,
+            ptn_len: 8,
             samples: vec![vec![0.0; 1]; 8],
             notes: vec![vec![Note::None; 8]; 8],
         }
@@ -92,17 +92,87 @@ fn main() {
     let bpm_label = Text::new("bpm:".to_string().into(), style.into()).install(&mut ui);
     let bpm = ui.prop(120);
     let bpm_input = IntegerInput::new(bpm, style.into())
-        .on_change(move |ctx, value| {
-            ctx.get_mut(song).bpm = value as u32;
-            audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+        .on_change({
+            let audio_send = audio_send.clone();
+            move |ctx, value| {
+                ctx.get_mut(song).bpm = value as u32;
+                audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+            }
         })
         .install(&mut ui);
     let ptn_len_label = Text::new("len:".to_string().into(), style.into()).install(&mut ui);
     let ptn_len = ui.prop(8);
-    let ptn_len_input = IntegerInput::new(ptn_len, style.into()).install(&mut ui);
+    let ptn_len_input = IntegerInput::new(ptn_len, style.into())
+        .on_change({
+            let audio_send = audio_send.clone();
+            move |ctx, value| {
+                let value = value.max(1) as usize;
+                ctx.set(ptn_len, value as i32);
+
+                if value < ctx.get(song).ptn_len {
+                    for track in 0..ctx.get(song).notes.len() {
+                        ctx.get_mut(song).notes[track].truncate(value);
+                    }
+                } else if value > ctx.get(song).ptn_len {
+                    for track in 0..ctx.get(song).notes.len() {
+                        ctx.get_mut(song).notes[track].resize(value, Note::None);
+                    }
+                }
+
+                ctx.get_mut(song).ptn_len = value;
+
+                audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+            }
+        })
+        .install(&mut ui);
 
     let controls = Row::new(5.0.into()).install(&mut ui, &[play, stop, bpm_label, bpm_input, ptn_len_label, ptn_len_input]);
-    ui.listen(controls, |ctx, event| {
+
+    // for i in 0..song.notes.len() {
+    //     let load_sample_button = Button::new("inst".to_string().into(), style)
+    //         .on_click({
+    //             let audio_send = audio_send.clone();
+    //             move |ctx| {
+    //                 if let Ok(result) = nfd::dialog().filter("wav").open() {
+    //                     match result {
+    //                         nfd::Response::Okay(path) => {
+    //                             let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
+    //                             ctx.get_mut(song).samples[i] = samples;
+    //                             audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+    //                         }
+    //                         _ => {}
+    //                     }
+    //                 }
+    //             }
+    //         })
+    //         .install(&mut ui);
+
+    //     // let del_button = ctx.get_slot(buttons).add_child(Button::install);
+    //     // ctx.get_slot(del_button).add_child(Label::with_text("del"));
+    //     // ctx.listen(del_button, move |myself: &mut Grid, mut ctx, value: ClickEvent| {
+    //     //     myself.song.samples.remove(i);
+    //     //     myself.song.notes.remove(i);
+
+    //     //     ctx.get_slot(myself.columns).remove_child(i);
+    //     //     myself.note_columns.remove(i);
+
+    //     //     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+    //     // });
+
+    //     for j in 0..ptn_len {
+    //         let note = ctx.get_slot(note_column).add_child(NoteElement::with_value(4, Note::None));
+    //         ctx.listen(note, move |myself: &mut Grid, mut ctx, value: Note| {
+    //             myself.song.notes[i][j] = value.clone();
+    //             ctx.send::<Note>(note, value);
+
+    //             myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+    //         });
+    //     }
+    //     let note_column = Col::new(5.0.into()).install(&mut ui, &[]);
+    // }
+
+    let root = Col::new(5.0.into()).install(&mut ui, &[controls]);
+    ui.listen(root, |ctx, event| {
         // match event {
         //     InputEvent::KeyPress { button } => {
         //         match button {
@@ -166,78 +236,8 @@ fn main() {
         // }
     });
 
-    let tree = ui.tree(move |ctx| {
-        let text = Text::new("asdf".to_string().into(), style.into()).install(ctx);
-        Col::new(5.0.into()).install(ctx, &[controls, text])
-    });
+    ui.root(controls);
 
-    ui.root(tree);
-
-    // let root = ctx.subtree().add_child(Stack::install);
-
-    // ctx.set_element_style::<StackStyle>(root, StackStyle::axis(Axis::Vertical));
-
-    // let controls_row = ctx.get_slot(root).add_child(Stack::install);
-    // ctx.set_element_style::<BoxStyle>(root, BoxStyle::v_align(Align::Center));
-
-    // let play_button = ctx.get_slot(controls_row).add_child(Button::install);
-    // ctx.get_slot(play_button).add_child(Label::with_text("play"));
-    // ctx.listen(play_button, |myself: &mut Grid, ctx, evt: ClickEvent| myself.audio_send.send(AudioMessage::Play).unwrap());
-
-    // let stop_button = ctx.get_slot(controls_row).add_child(Button::install);
-    // ctx.get_slot(stop_button).add_child(Label::with_text("stop"));
-    // ctx.listen(stop_button, |myself: &mut Grid, ctx, evt: ClickEvent| myself.audio_send.send(AudioMessage::Stop).unwrap());
-
-    // let properties = ctx.get_slot(controls_row).add_child(Stack::install);
-    // ctx.set_element_style::<BoxStyle>(properties, BoxStyle::padding(5.0));
-    // ctx.set_element_style::<StackStyle>(properties, StackStyle::spacing(5.0));
-
-    // let bpm_label = ctx.get_slot(properties).add_child(Label::with_text("bpm:"));
-    // ctx.set_element_style::<BoxStyle>(bpm_label, BoxStyle::v_align(Align::Center));
-    // let bpm = ctx.get_slot(properties).add_child(IntegerInput::with_value(120));
-    // ctx.listen(bpm, move |myself: &mut Grid, mut ctx, value: i32| {
-    //     myself.song.bpm = value as u32;
-    //     ctx.send::<i32>(bpm, value);
-    //     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    // });
-
-    // let ptn_length_label = ctx.get_slot(properties).add_child(Label::with_text("length:"));
-    // ctx.set_element_style::<BoxStyle>(ptn_length_label, BoxStyle::v_align(Align::Center));
-    // let ptn_length = ctx.get_slot(properties).add_child(IntegerInput::with_value(song.ptn_length as i32));
-    // ctx.listen(ptn_length, move |myself: &mut Grid, mut ctx, value: i32| {
-    //     let new_ptn_length = value.max(1) as usize;
-
-    //     if new_ptn_length < myself.song.ptn_length {
-    //         for track in 0..myself.song.notes.len() {
-    //             myself.song.notes[track].truncate(new_ptn_length);
-    //             for _ in 0..myself.song.ptn_length.saturating_sub(new_ptn_length) {
-    //                 ctx.get_slot(myself.note_columns[track]).remove_child(new_ptn_length);
-    //             }
-    //         }
-    //     } else if new_ptn_length > myself.song.ptn_length {
-    //         for track in 0..myself.song.notes.len() {
-    //             myself.song.notes[track].resize(new_ptn_length, Note::None);
-    //             for i in myself.song.ptn_length..new_ptn_length {
-    //                 Grid::note(&mut ctx, track, i, myself.note_columns[track]);
-    //             }
-    //         }
-    //     }
-
-    //     myself.song.ptn_length = new_ptn_length;
-    //     ctx.send::<i32>(ptn_length, new_ptn_length as i32);
-
-    //     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    // });
-
-    // let song: Song = Song::default();
-    // let cursor = (0, 0);
-
-    // let tracks = ctx.get_slot(root).add_child(Stack::install);
-    // let columns = ctx.get_slot(tracks).add_child(Stack::install);
-    // let mut note_columns = Vec::new();
-    // for i in 0..song.notes.len() {
-    //     note_columns.push(Grid::column(&mut ctx, i, song.ptn_length, columns));
-    // }
 
     // let add_column = ctx.get_slot(tracks).add_child(Stack::install);
     // ctx.set_element_style::<StackStyle>(add_column, StackStyle::axis(Axis::Vertical));
@@ -256,62 +256,6 @@ fn main() {
 
     // let cursor_note = ctx.get_slot(note_columns[cursor.0]).get_child(cursor.1).unwrap();
     // ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
-
-    // let id = ctx.get_self();
-    // ctx.listen(id, Grid::handle);
-
-    // fn column(ctx: &mut Context<Grid>, i: usize, ptn_length: usize, columns: ElementRef) -> ElementRef {
-    //     let column = ctx.get_slot(columns).add_child(Stack::install);
-    //     ctx.set_element_style::<StackStyle>(column, StackStyle::axis(Axis::Vertical));
-
-    //     let buttons = ctx.get_slot(column).add_child(Stack::install);
-    //     let load_sample_button = ctx.get_slot(buttons).add_child(Button::install);
-    //     ctx.get_slot(load_sample_button).add_child(Label::with_text("inst"));
-    //     ctx.listen(load_sample_button, move |myself: &mut Grid, ctx, evt: ClickEvent| {
-    //         if let Ok(result) = nfd::dialog().filter("wav").open() {
-    //             match result {
-    //                 nfd::Response::Okay(path) => {
-    //                     let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
-    //                     myself.song.samples[i] = samples;
-    //                     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    //                 }
-    //                 _ => {}
-    //             }
-    //         }
-    //     });
-
-    //     let del_button = ctx.get_slot(buttons).add_child(Button::install);
-    //     ctx.get_slot(del_button).add_child(Label::with_text("del"));
-    //     // ctx.listen(del_button, move |myself: &mut Grid, mut ctx, value: ClickEvent| {
-    //     //     myself.song.samples.remove(i);
-    //     //     myself.song.notes.remove(i);
-
-    //     //     ctx.get_slot(myself.columns).remove_child(i);
-    //     //     myself.note_columns.remove(i);
-
-    //     //     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    //     // });
-
-    //     let note_column = ctx.get_slot(column).add_child(Stack::install);
-    //     ctx.set_element_style::<StackStyle>(note_column, StackStyle::axis(Axis::Vertical).spacing(5.0));
-    //     for j in 0..ptn_length {
-    //         Grid::note(ctx, i, j, note_column);
-    //     }
-
-    //     note_column
-    // }
-
-    // fn note(ctx: &mut Context<Grid>, i: usize, j: usize, note_column: ElementRef) -> ElementRef {
-    //     let note = ctx.get_slot(note_column).add_child(NoteElement::with_value(4, Note::None));
-    //     ctx.listen(note, move |myself: &mut Grid, mut ctx, value: Note| {
-    //         myself.song.notes[i][j] = value.clone();
-    //         ctx.send::<Note>(note, value);
-
-    //         myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    //     });
-
-    //     note
-    // }
 
 
     ui.update();
@@ -481,63 +425,58 @@ impl IntegerInput {
 }
 
 
-// struct NoteElement {
-//     num_factors: usize,
-//     value: Note,
-//     stack: ElementRef,
-// }
+struct NoteElement {
+    num_factors: usize,
+    value: Prop<Note>,
+    style: Ref<TextStyle>,
+}
 
 // impl NoteElement {
-//     fn with_value(num_factors: usize, value: Note) -> impl FnOnce(Context<NoteElement>) -> NoteElement {
-//         move |mut ctx| {
-//             let stack = ctx.subtree().add_child(Stack::install);
-//             ctx.set_element_style::<StackStyle>(stack, StackStyle::spacing(5.0));
-//             ctx.set_element_style::<BoxStyle>(stack, BoxStyle::padding(2.0));
-
-//             NoteElement::setup(&mut ctx, num_factors, &value, stack);
-
-//             ctx.receive(|myself: &mut NoteElement, mut ctx: Context<NoteElement>, value: Note| {
-//                 myself.value = value;
-//                 for _ in 0..myself.num_factors {
-//                     ctx.get_slot(myself.stack).remove_child(0);
-//                 }
-//                 NoteElement::setup(&mut ctx, myself.num_factors, &myself.value, myself.stack);
-//             });
-
-//             NoteElement {
-//                 num_factors: num_factors,
-//                 value: value,
-//                 stack: stack,
-//             }
+//     fn new(num_factors: usize, value: Prop<Note>, style: Ref<TextStyle>) -> NoteElement {
+//         NoteElement {
+//             num_factors: num_factors,
+//             value: value,
 //         }
 //     }
 
-//     fn setup(ctx: &mut Context<NoteElement>, num_factors: usize, value: &Note, stack: ElementRef) {
-//         match value {
-//             Note::On(factors) => {
-//                 for i in 0..num_factors {
-//                     let factor = ctx.get_slot(stack).add_child(IntegerInput::with_value(factors[i] as i32));
-//                     ctx.listen(factor, move |myself: &mut NoteElement, mut ctx, value: i32| {
-//                         if let Note::On(ref factors) = myself.value {
-//                             let mut factors = factors.clone();
-//                             factors[i] = value;
-//                             ctx.fire(Note::On(factors));
-//                         }
-//                     });
-//                 }
-//             }
-//             Note::Off => {
-//                 for _ in 0..num_factors {
-//                     ctx.get_slot(stack).add_child(Label::with_text("--"));
-//                 }
-//             }
-//             Note::None => {
-//                 for _ in 0..4 {
-//                     ctx.get_slot(stack).add_child(Label::with_text(".."));
-//                 }
-//             }
+//     fn install(self, ui: &mut UI) -> ElementRef {
+//         let factors = Vec::new();
+//         for i in 0..self.num_factors {
+//             factors.push(IntegerInput::new(self.factors[i] as i32, self.style)
+//                 .on_change(move |ctx, new_value| {
+//                     if let Note::On(ref factors) = ctx.get(value) {
+//                         factors[i] = value;
+//                     }
+//                 })
+//                 .install(ui));
 //         }
+//         let factors = Row::new(5.0.into()).install(ui, &factors);
+
+//         let mut off = Vec::new();
+//         for _ in 0..num_factors {
+//             off.push(Text::new("--".to_string().into(), self.style).install(ui));
+//         }
+//         let off = Row::new(5.0.into()).install(ui, &off);
+
+//         let mut none = Vec::new();
+//         for _ in 0..num_factors {
+//             none.push(Text::new("..".to_string().into(), self.style).install(ui));
+//         }
+//         let none = Row::new(5.0.into()).install(ui, &none);
+
+//         let contents = ui.tree(move |ctx| {
+//             match self.value {
+//                 Note::On(_) => {
+//                     factors
+//                 }
+//                 Note::Off => {
+//                     off
+//                 }
+//                 Note::None => {
+//                     none
+//                 }
+//             }
+//         });
+//         Padding::new(2.0.into()).install(ui, contents)
 //     }
 // }
-
-// impl Element for NoteElement {}

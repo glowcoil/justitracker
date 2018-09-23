@@ -77,7 +77,7 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                             for track in 0..song.notes.len() {
                                 if t == note_length {
                                     t = 0;
-                                    note = (note + 1) % song.ptn_length;
+                                    note = (note + 1) % song.ptn_len;
                                 }
 
                                 let mut previous = note;
