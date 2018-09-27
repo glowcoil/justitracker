@@ -20,6 +20,10 @@ use render::*;
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct ElementRef(usize);
 
+pub struct Ref<A> {
+    get: Box<Fn(&Slab<Box<UnsafeAny>>) -> &A>,
+}
+
 macro_rules! reference {
     ($type:ident) => {
         pub struct $type<A> {
@@ -49,35 +53,21 @@ macro_rules! reference {
     }
 }
 
-reference! { Prop }
-
-reference! { Ref }
-
-impl<A> From<Prop<A>> for Ref<A> {
-    fn from(prop: Prop<A>) -> Ref<A> {
-        Ref::new(prop.index)
-    }
-}
+reference! { ComponentRef }
 
 pub enum RefOrValue<A> {
     Ref(Ref<A>),
     Value(A),
 }
 
-impl<A: 'static> RefOrValue<A> {
-    fn get<'a, C: GetProperty>(&'a self, context: &'a C) -> &'a A {
-        match *self {
-            RefOrValue::Ref(reference) => context.get(reference),
-            RefOrValue::Value(ref value) => value,
-        }
-    }
-}
-
-impl<A> From<Prop<A>> for RefOrValue<A> {
-    fn from(prop: Prop<A>) -> RefOrValue<A> {
-        RefOrValue::Ref(Ref::new(prop.index))
-    }
-}
+// impl<A: 'static> RefOrValue<A> {
+//     fn get<'a, C: GetProperty>(&'a self, context: &'a C) -> &'a A {
+//         match *self {
+//             RefOrValue::Ref(reference) => context.get(reference),
+//             RefOrValue::Value(ref value) => value,
+//         }
+//     }
+// }
 
 impl<A> From<Ref<A>> for RefOrValue<A> {
     fn from(reference: Ref<A>) -> RefOrValue<A> {
@@ -131,51 +121,55 @@ impl<'a> ChildDelegate<'a> {
 }
 
 pub struct Context {
-    properties: Slab<Box<UnsafeAny>>,
-    dependencies: Slab<Vec<usize>>,
-    dependents: Slab<Vec<usize>>,
-    update: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>)>>>,
-    priorities: Slab<u32>,
-    queue: PriorityQueue<usize, Reverse<u32>>,
+    components: Slab<Box<UnsafeAny>>,
+
+    // properties: Slab<Box<UnsafeAny>>,
+    // dependencies: Slab<Vec<usize>>,
+    // dependents: Slab<Vec<usize>>,
+    // update: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>)>>>,
+    // priorities: Slab<u32>,
+    // queue: PriorityQueue<usize, Reverse<u32>>,
 }
 
 impl Context {
     fn new() -> Context {
         Context {
-            properties: Slab::new(),
-            dependencies: Slab::new(),
-            dependents: Slab::new(),
-            update: Slab::new(),
-            priorities: Slab::new(),
-            queue: PriorityQueue::new(),
+            components: Slab::new(),
+
+            // properties: Slab::new(),
+            // dependencies: Slab::new(),
+            // dependents: Slab::new(),
+            // update: Slab::new(),
+            // priorities: Slab::new(),
+            // queue: PriorityQueue::new(),
         }
     }
 
-    pub fn get<'a, A: 'static, R: Into<Ref<A>>>(&'a self, reference: R) -> &'a A {
-        Context::get_prop(&self.properties, reference.into())
-    }
+    // pub fn get<'a, A: 'static, R: Into<Ref<A>>>(&'a self, reference: R) -> &'a A {
+    //     Context::get_prop(&self.properties, reference.into())
+    // }
 
-    pub fn get_mut<'a, A: 'static>(&'a mut self, prop: Prop<A>) -> &'a mut A {
-        self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
-        &mut *unsafe { self.properties[prop.index].downcast_mut_unchecked() }
-    }
+    // pub fn get_mut<'a, A: 'static>(&'a mut self, prop: Prop<A>) -> &'a mut A {
+    //     self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
+    //     &mut *unsafe { self.properties[prop.index].downcast_mut_unchecked() }
+    // }
 
-    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
-        self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
-        self.properties[prop.index] = Box::new(value);
-    }
+    // pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
+    //     self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
+    //     self.properties[prop.index] = Box::new(value);
+    // }
 
-    fn get_prop<'a, A: 'static>(props: &'a Slab<Box<UnsafeAny>>, reference: Ref<A>) -> &'a A {
-        &*unsafe { props[reference.index].downcast_ref_unchecked() }
-    }
+    // fn get_prop<'a, A: 'static>(props: &'a Slab<Box<UnsafeAny>>, reference: Ref<A>) -> &'a A {
+    //     &*unsafe { props[reference.index].downcast_ref_unchecked() }
+    // }
 }
 
 pub struct ElementContext<'a>(&'a Context);
 
 impl<'a> ElementContext<'a> {
-    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
-        self.0.get(reference)
-    }
+    // pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+    //     self.0.get(reference)
+    // }
 }
 
 pub struct EventContext<'a> {
@@ -197,17 +191,17 @@ impl<'a> EventContext<'a> {
         }
     }
 
-    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
-        self.context.get(reference)
-    }
+    // pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+    //     self.context.get(reference)
+    // }
 
-    pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
-        self.context.get_mut(prop)
-    }
+    // pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
+    //     self.context.get_mut(prop)
+    // }
 
-    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
-        self.context.set(prop, value)
-    }
+    // pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
+    //     self.context.set(prop, value)
+    // }
 
     pub fn focus(&mut self, element: ElementRef) {
         *self.focus = Some(element);
@@ -253,17 +247,17 @@ impl<'a> EventContext<'a> {
 pub struct TreeContext<'a>(&'a mut UI);
 
 impl<'a> TreeContext<'a> {
-    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
-        self.0.context.get(reference)
-    }
+    // pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+    //     self.0.context.get(reference)
+    // }
 
-    pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
-        self.0.context.get_mut(prop)
-    }
+    // pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
+    //     self.0.context.get_mut(prop)
+    // }
 
-    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
-        self.0.context.set(prop, value)
-    }
+    // pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
+    //     self.0.context.set(prop, value)
+    // }
 
     pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
         self.0.element(element, children)
@@ -277,49 +271,49 @@ impl<'a> TreeContext<'a> {
         self.0.listen(element, listener)
     }
 
-    pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.0.prop(value)
-    }
+    // pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+    //     self.0.prop(value)
+    // }
 
-    pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.0.map(a, f)
-    }
+    // pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+    //     self.0.map(a, f)
+    // }
 }
 
-pub trait GetProperty {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A;
-}
+// pub trait GetProperty {
+//     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A;
+// }
 
-impl GetProperty for Context {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
+// impl GetProperty for Context {
+//     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+//         self.get(reference)
+//     }
+// }
 
-impl<'b> GetProperty for ElementContext<'b> {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
+// impl<'b> GetProperty for ElementContext<'b> {
+//     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+//         self.get(reference)
+//     }
+// }
 
-impl<'b> GetProperty for EventContext<'b> {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
+// impl<'b> GetProperty for EventContext<'b> {
+//     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+//         self.get(reference)
+//     }
+// }
 
-impl<'b> GetProperty for TreeContext<'b> {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
+// impl<'b> GetProperty for TreeContext<'b> {
+//     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+//         self.get(reference)
+//     }
+// }
 
 pub trait Install {
     fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef;
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef;
     fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F);
-    fn prop<A: 'static>(&mut self, value: A) -> Prop<A>;
-    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static;
+    // fn prop<A: 'static>(&mut self, value: A) -> Prop<A>;
+    // fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static;
 }
 
 impl Install for UI {
@@ -332,12 +326,12 @@ impl Install for UI {
     fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
         self.listen(element, listener);
     }
-    fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.prop(value)
-    }
-    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.map(a, f)
-    }
+    // fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+    //     self.prop(value)
+    // }
+    // fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+    //     self.map(a, f)
+    // }
 }
 
 impl<'b> Install for TreeContext<'b> {
@@ -350,12 +344,12 @@ impl<'b> Install for TreeContext<'b> {
     fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
         self.listen(element, listener);
     }
-    fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.prop(value)
-    }
-    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.map(a, f)
-    }
+    // fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+    //     self.prop(value)
+    // }
+    // fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+    //     self.map(a, f)
+    // }
 }
 
 /* ui */
@@ -456,28 +450,40 @@ impl UI {
         self.listeners[element.0] = Some(Box::new(listener));
     }
 
-    pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        let index = self.context.properties.insert(Box::new(value));
-        self.context.dependencies.insert(Vec::new());
-        self.context.dependents.insert(Vec::new());
-        self.context.update.insert(None);
-        self.context.priorities.insert(0);
-        Prop::new(index)
+    pub fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
+        let index = self.context.components.insert(Box::new(component));
+        ComponentRef::new(index)
     }
 
-    pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        let a = a.into();
-        let value = f(self.context.get(a));
-        let b = self.prop(value);
-        self.context.dependencies[b.index].push(a.index);
-        self.context.dependents[a.index].push(b.index);
-        self.context.priorities[b.index] = self.context.priorities[a.index] + 1;
-        self.context.update[b.index] = Some(Box::new(move |props| {
-            let value = f(Context::get_prop(props, a));
-            props[b.index] = Box::new(value);
-        }));
-        b.into()
+    pub fn accessor<'a, C: 'static, A: 'static, G>(&mut self, component: ComponentRef<C>, get: G) -> Ref<A>
+            where G: Fn(&'a Slab<Box<UnsafeAny>>) -> &'a A {
+        Ref { get: move |components: &Slab<Box<UnsafeAny>>| { get(unsafe { components[component.index].downcast_ref_unchecked() }) } }
     }
+
+    // pub fn bind<C: 'static>(&mut self, component: ComponentRef<C>, tree: 
+
+    // pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
+    //     let index = self.context.properties.insert(Box::new(value));
+    //     self.context.dependencies.insert(Vec::new());
+    //     self.context.dependents.insert(Vec::new());
+    //     self.context.update.insert(None);
+    //     self.context.priorities.insert(0);
+    //     Prop::new(index)
+    // }
+
+    // pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
+    //     let a = a.into();
+    //     let value = f(self.context.get(a));
+    //     let b = self.prop(value);
+    //     self.context.dependencies[b.index].push(a.index);
+    //     self.context.dependents[a.index].push(b.index);
+    //     self.context.priorities[b.index] = self.context.priorities[a.index] + 1;
+    //     self.context.update[b.index] = Some(Box::new(move |props| {
+    //         let value = f(Context::get_prop(props, a));
+    //         props[b.index] = Box::new(value);
+    //     }));
+    //     b.into()
+    // }
 
     /* event handling */
 
@@ -953,23 +959,19 @@ enum ButtonState {
 }
 
 pub struct Button {
-    text: RefOrValue<String>,
-    style: Ref<TextStyle>,
-    on_click: Option<Box<Fn(&mut EventContext)>>,
+    state: ButtonState,
 }
 
+pub struct ClickEvent;
+
 impl Button {
-    pub fn with_text(text: RefOrValue<String>, style: Ref<TextStyle>) -> Button {
-        Button { text: text, style: style, on_click: None }
+    pub fn new() -> Button {
+        Button { state: ButtonState::Up }
     }
 
-    pub fn on_click<F: Fn(&mut EventContext) + 'static>(mut self, on_click: F) -> Button {
-        self.on_click = Some(Box::new(on_click));
-        self
-    }
-
-    pub fn install(self, ui: &mut impl Install) -> ElementRef {
-        let state = ui.prop(ButtonState::Up);
+    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
+        let button = ui.component(self);
+        let state = ui.accessor(button, Button::state);
         let color = ui.map(state, |state| {
             match state {
                 ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
@@ -978,39 +980,39 @@ impl Button {
             }
         });
 
-        let text = self.text;
-        let style = self.style;
-        let on_click = self.on_click;
+        let padding = Padding::new(10.0f32.into()).install(ui, child);
+        let background = BackgroundColor::new(color.into()).install(ui, padding);
+        ui.listen(background, Button::input);
 
-        let text = Text::new(text, style).install(ui);
-
-        let padding = Padding::new(10.0f32.into()).install(ui, text);
-        let button = BackgroundColor::new(color.into()).install(ui, padding);
-        ui.listen(button, move |ctx, event| {
-            match event {
-                ElementEvent::MouseEnter => {
-                    ctx.set(state, ButtonState::Hover);
-                }
-                ElementEvent::MouseLeave => {
-                    ctx.set(state, ButtonState::Up);
-                }
-                ElementEvent::MousePress(MouseButton::Left) => {
-                    ctx.set(state, ButtonState::Down);
-                }
-                ElementEvent::MouseRelease(MouseButton::Left) => {
-                    if *ctx.get(state) == ButtonState::Down {
-                        ctx.set(state, ButtonState::Hover);
-                        if let Some(ref on_click) = on_click {
-                            on_click(ctx);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        });
-
-        button
+        ui.bind(button, background)
     }
+
+    fn input(&mut self, ctx: EventContext, event: ElementEvent) {
+        match event {
+            ElementEvent::MouseEnter => {
+                self.state = ButtonState::Hover;
+                // ctx.update(Button::state);
+            }
+            ElementEvent::MouseLeave => {
+                self.state = ButtonState::Up;
+                // ctx.update(Button::state);
+            }
+            ElementEvent::MousePress(MouseButton::Left) => {
+                self.state = ButtonState::Down;
+                // ctx.update(Button::state);
+            }
+            ElementEvent::MouseRelease(MouseButton::Left) => {
+                if self.state == ButtonState::Down {
+                    self.state = ButtonState::Hover;
+                    // ctx.update(Button::state);
+                    ctx.fire(ClickEvent);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn state(&self) -> &ButtonState { &self.state }
 }
 
 

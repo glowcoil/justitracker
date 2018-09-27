@@ -83,50 +83,50 @@ fn main() {
 
     let style = ui.prop(TextStyle { font: font, scale: Scale::uniform(14.0) });
 
-    let song = ui.prop(Song::default());
-    let audio_send = start_audio_thread();
-    let cursor = ui.prop((0, 0));
+    // let song = ui.prop(Song::default());
+    // let audio_send = start_audio_thread();
+    // let cursor = ui.prop((0, 0));
 
-    let play = Button::with_text("play".to_string().into(), style.into()).install(&mut ui);
-    let stop = Button::with_text("stop".to_string().into(), style.into()).install(&mut ui);
-    let bpm_label = Text::new("bpm:".to_string().into(), style.into()).install(&mut ui);
-    let bpm = ui.prop(120);
-    let bpm_input = IntegerInput::new(bpm, style.into())
-        .on_change({
-            let audio_send = audio_send.clone();
-            move |ctx, value| {
-                ctx.get_mut(song).bpm = value as u32;
-                audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
-            }
-        })
-        .install(&mut ui);
-    let ptn_len_label = Text::new("len:".to_string().into(), style.into()).install(&mut ui);
-    let ptn_len = ui.prop(8);
-    let ptn_len_input = IntegerInput::new(ptn_len, style.into())
-        .on_change({
-            let audio_send = audio_send.clone();
-            move |ctx, value| {
-                let value = value.max(1) as usize;
-                ctx.set(ptn_len, value as i32);
+    // let play = Button::with_text("play".to_string().into(), style.into()).install(&mut ui);
+    // let stop = Button::with_text("stop".to_string().into(), style.into()).install(&mut ui);
+    // let bpm_label = Text::new("bpm:".to_string().into(), style.into()).install(&mut ui);
+    // let bpm = ui.prop(120);
+    // let bpm_input = IntegerInput::new(bpm, style.into())
+    //     .on_change({
+    //         let audio_send = audio_send.clone();
+    //         move |ctx, value| {
+    //             ctx.get_mut(song).bpm = value as u32;
+    //             audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+    //         }
+    //     })
+    //     .install(&mut ui);
+    // let ptn_len_label = Text::new("len:".to_string().into(), style.into()).install(&mut ui);
+    // let ptn_len = ui.prop(8);
+    // let ptn_len_input = IntegerInput::new(ptn_len, style.into())
+    //     .on_change({
+    //         let audio_send = audio_send.clone();
+    //         move |ctx, value| {
+    //             let value = value.max(1) as usize;
+    //             ctx.set(ptn_len, value as i32);
 
-                if value < ctx.get(song).ptn_len {
-                    for track in 0..ctx.get(song).notes.len() {
-                        ctx.get_mut(song).notes[track].truncate(value);
-                    }
-                } else if value > ctx.get(song).ptn_len {
-                    for track in 0..ctx.get(song).notes.len() {
-                        ctx.get_mut(song).notes[track].resize(value, Note::None);
-                    }
-                }
+    //             if value < ctx.get(song).ptn_len {
+    //                 for track in 0..ctx.get(song).notes.len() {
+    //                     ctx.get_mut(song).notes[track].truncate(value);
+    //                 }
+    //             } else if value > ctx.get(song).ptn_len {
+    //                 for track in 0..ctx.get(song).notes.len() {
+    //                     ctx.get_mut(song).notes[track].resize(value, Note::None);
+    //                 }
+    //             }
 
-                ctx.get_mut(song).ptn_len = value;
+    //             ctx.get_mut(song).ptn_len = value;
 
-                audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
-            }
-        })
-        .install(&mut ui);
+    //             audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+    //         }
+    //     })
+    //     .install(&mut ui);
 
-    let controls = Row::new(5.0.into()).install(&mut ui, &[play, stop, bpm_label, bpm_input, ptn_len_label, ptn_len_input]);
+    // let controls = Row::new(5.0.into()).install(&mut ui, &[play, stop, bpm_label, bpm_input, ptn_len_label, ptn_len_input]);
 
     // for i in 0..song.notes.len() {
     //     let load_sample_button = Button::new("inst".to_string().into(), style)
@@ -171,8 +171,8 @@ fn main() {
     //     let note_column = Col::new(5.0.into()).install(&mut ui, &[]);
     // }
 
-    let root = Col::new(5.0.into()).install(&mut ui, &[controls]);
-    ui.listen(root, |ctx, event| {
+    // let root = Col::new(5.0.into()).install(&mut ui, &[controls]);
+    // ui.listen(root, |ctx, event| {
         // match event {
         //     InputEvent::KeyPress { button } => {
         //         match button {
@@ -234,9 +234,13 @@ fn main() {
         //     }
         //     _ => {}
         // }
-    });
+    // });
 
-    ui.root(controls);
+    // ui.root(controls);
+
+    let txt = Text::new("test".to_string().into(), style.into()).install(&mut ui);
+    let btn = Button::new().install(&mut ui, txt);
+    ui.root(btn);
 
 
     // let add_column = ctx.get_slot(tracks).add_child(Stack::install);
@@ -360,76 +364,76 @@ fn main() {
 }
 
 
-struct IntegerInput {
-    value: Prop<i32>,
-    style: Ref<TextStyle>,
-    on_change: Option<Box<Fn(&mut EventContext, i32)>>,
-}
+// struct IntegerInput {
+//     value: Prop<i32>,
+//     style: Ref<TextStyle>,
+//     on_change: Option<Box<Fn(&mut EventContext, i32)>>,
+// }
 
-impl IntegerInput {
-    fn new(value: Prop<i32>, style: Ref<TextStyle>) -> IntegerInput {
-        IntegerInput { value: value, style: style, on_change: None }
-    }
+// impl IntegerInput {
+//     fn new(value: Prop<i32>, style: Ref<TextStyle>) -> IntegerInput {
+//         IntegerInput { value: value, style: style, on_change: None }
+//     }
 
-    pub fn on_change<F: Fn(&mut EventContext, i32) + 'static>(mut self, on_change: F) -> IntegerInput {
-        self.on_change = Some(Box::new(on_change));
-        self
-    }
+//     pub fn on_change<F: Fn(&mut EventContext, i32) + 'static>(mut self, on_change: F) -> IntegerInput {
+//         self.on_change = Some(Box::new(on_change));
+//         self
+//     }
 
-    fn install(self, ui: &mut impl Install) -> ElementRef {
-        let old = ui.prop(None);
-        let delta = ui.prop(None);
-        let drag_origin = ui.prop(None);
+//     fn install(self, ui: &mut impl Install) -> ElementRef {
+//         let old = ui.prop(None);
+//         let delta = ui.prop(None);
+//         let drag_origin = ui.prop(None);
 
-        let string = ui.map(self.value, |value| value.to_string());
-        let text = Text::new(string.into(), self.style).install(ui);
-        ui.listen(text, move |ctx, event| {
-            match event {
-                ElementEvent::MousePress(MouseButton::Left) => {
-                    ctx.capture_mouse(text);
-                    ctx.hide_cursor();
+//         let string = ui.map(self.value, |value| value.to_string());
+//         let text = Text::new(string.into(), self.style).install(ui);
+//         ui.listen(text, move |ctx, event| {
+//             match event {
+//                 ElementEvent::MousePress(MouseButton::Left) => {
+//                     ctx.capture_mouse(text);
+//                     ctx.hide_cursor();
 
-                    let value = *ctx.get(self.value);
-                    ctx.set(old, Some(value));
-                    ctx.set(delta, Some(0.0));
-                    let mouse_position = ctx.get_mouse_position();
-                    ctx.set(drag_origin, Some(mouse_position));
-                }
-                ElementEvent::MouseMove(position) => {
-                    if let Some(drag_origin) = *ctx.get(drag_origin) {
-                        let old_value = ctx.get(old).unwrap();
-                        let delta_value = ctx.get(delta).unwrap() - (position.y - drag_origin.y) / 8.0;
-                        ctx.set(delta, Some(delta_value));
-                        ctx.set(self.value, (old_value as f32 + delta_value) as i32);
-                        ctx.set_mouse_position(drag_origin);
+//                     let value = *ctx.get(self.value);
+//                     ctx.set(old, Some(value));
+//                     ctx.set(delta, Some(0.0));
+//                     let mouse_position = ctx.get_mouse_position();
+//                     ctx.set(drag_origin, Some(mouse_position));
+//                 }
+//                 ElementEvent::MouseMove(position) => {
+//                     if let Some(drag_origin) = *ctx.get(drag_origin) {
+//                         let old_value = ctx.get(old).unwrap();
+//                         let delta_value = ctx.get(delta).unwrap() - (position.y - drag_origin.y) / 8.0;
+//                         ctx.set(delta, Some(delta_value));
+//                         ctx.set(self.value, (old_value as f32 + delta_value) as i32);
+//                         ctx.set_mouse_position(drag_origin);
 
-                        if let Some(ref on_change) = self.on_change {
-                            let value = *ctx.get(self.value);
-                            on_change(ctx, value);
-                        }
-                    }
-                }
-                ElementEvent::MouseRelease(MouseButton::Left) => {
-                    ctx.relinquish_mouse(text);
-                    ctx.show_cursor();
+//                         if let Some(ref on_change) = self.on_change {
+//                             let value = *ctx.get(self.value);
+//                             on_change(ctx, value);
+//                         }
+//                     }
+//                 }
+//                 ElementEvent::MouseRelease(MouseButton::Left) => {
+//                     ctx.relinquish_mouse(text);
+//                     ctx.show_cursor();
 
-                    ctx.set(old, None);
-                    ctx.set(delta, None);
-                    ctx.set(drag_origin, None);
-                }
-                _ => {}
-            }
-        });
-        text
-    }
-}
+//                     ctx.set(old, None);
+//                     ctx.set(delta, None);
+//                     ctx.set(drag_origin, None);
+//                 }
+//                 _ => {}
+//             }
+//         });
+//         text
+//     }
+// }
 
 
-struct NoteElement {
-    num_factors: usize,
-    value: Prop<Note>,
-    style: Ref<TextStyle>,
-}
+// struct NoteElement {
+//     num_factors: usize,
+//     value: Prop<Note>,
+//     style: Ref<TextStyle>,
+// }
 
 // impl NoteElement {
 //     fn new(num_factors: usize, value: Prop<Note>, style: Ref<TextStyle>) -> NoteElement {
