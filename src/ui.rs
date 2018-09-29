@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use slab::Slab;
 use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
+use anymap::AnyMap;
 
 use glium::glutin;
 use rusttype::{Font, Scale, point, PositionedGlyph};
@@ -18,7 +19,10 @@ use render::*;
 /* references */
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub struct ElementRef(usize);
+pub struct ElementRef {
+    index: usize,
+    component: Option<usize>,
+}
 
 macro_rules! reference {
     ($type:ident) => {
@@ -50,8 +54,8 @@ macro_rules! reference {
 }
 
 reference! { Prop }
-
 reference! { Ref }
+reference! { ComponentRef }
 
 impl<A> From<Prop<A>> for Ref<A> {
     fn from(prop: Prop<A>) -> Ref<A> {
@@ -109,7 +113,7 @@ pub trait Element {
 }
 
 pub struct ChildDelegate<'a> {
-    reference: ElementRef,
+    reference: usize,
     element: &'a Element,
     context: &'a Context,
     bounds: BoundingBox,
@@ -181,13 +185,13 @@ impl<'a> ElementContext<'a> {
 pub struct EventContext<'a> {
     context: &'a mut Context,
     input_state: &'a InputState,
-    focus: &'a mut Option<ElementRef>,
-    mouse_focus: &'a mut Option<ElementRef>,
+    focus: &'a mut Option<usize>,
+    mouse_focus: &'a mut Option<usize>,
     response: UIEventResponse,
 }
 
 impl<'a> EventContext<'a> {
-    fn new<'b>(context: &'b mut Context, input_state: &'b InputState, focus: &'b mut Option<ElementRef>, mouse_focus: &'b mut Option<ElementRef>) -> EventContext<'b> {
+    fn new<'b>(context: &'b mut Context, input_state: &'b InputState, focus: &'b mut Option<usize>, mouse_focus: &'b mut Option<usize>) -> EventContext<'b> {
         EventContext {
             context: context,
             input_state: input_state,
@@ -210,21 +214,25 @@ impl<'a> EventContext<'a> {
     }
 
     pub fn focus(&mut self, element: ElementRef) {
-        *self.focus = Some(element);
+        *self.focus = Some(element.index);
+    }
+
+    pub fn fire<E: 'static>(&mut self, event: E) {
+
     }
 
     pub fn defocus(&mut self, element: ElementRef) {
-        if *self.focus == Some(element) {
+        if *self.focus == Some(element.index) {
             *self.focus = None;
         }
     }
 
     pub fn capture_mouse(&mut self, element: ElementRef) {
-        *self.mouse_focus = Some(element);
+        *self.mouse_focus = Some(element.index);
     }
 
     pub fn relinquish_mouse(&mut self, element: ElementRef) {
-        if *self.mouse_focus == Some(element) {
+        if *self.mouse_focus == Some(element.index) {
             *self.mouse_focus = None;
         }
     }
@@ -255,34 +263,6 @@ pub struct TreeContext<'a>(&'a mut UI);
 impl<'a> TreeContext<'a> {
     pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
         self.0.context.get(reference)
-    }
-
-    pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
-        self.0.context.get_mut(prop)
-    }
-
-    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
-        self.0.context.set(prop, value)
-    }
-
-    pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
-        self.0.element(element, children)
-    }
-
-    pub fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
-        self.0.tree(f)
-    }
-
-    pub fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
-        self.0.listen(element, listener)
-    }
-
-    pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.0.prop(value)
-    }
-
-    pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.0.map(a, f)
     }
 }
 
@@ -317,7 +297,9 @@ impl<'b> GetProperty for TreeContext<'b> {
 pub trait Install {
     fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef;
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef;
-    fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F);
+    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E));
+    fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C>;
+    fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef;
     fn prop<A: 'static>(&mut self, value: A) -> Prop<A>;
     fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static;
 }
@@ -329,8 +311,14 @@ impl Install for UI {
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
         self.tree(f)
     }
-    fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
-        self.listen(element, listener);
+    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E)) {
+        self.listen(element, listener, callback);
+    }
+    fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
+        self.component(component)
+    }
+    fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef {
+        self.bind(component, element)
     }
     fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
         self.prop(value)
@@ -342,19 +330,25 @@ impl Install for UI {
 
 impl<'b> Install for TreeContext<'b> {
     fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
-        self.element(element, children)
+        self.0.element(element, children)
     }
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
-        self.tree(f)
+        self.0.tree(f)
     }
-    fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
-        self.listen(element, listener);
+    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E)) {
+        self.0.listen(element, listener, callback);
+    }
+    fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
+        self.0.component(component)
+    }
+    fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef {
+        self.0.bind(component, element)
     }
     fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.prop(value)
+        self.0.prop(value)
     }
     fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.map(a, f)
+        self.0.map(a, f)
     }
 }
 
@@ -366,19 +360,22 @@ pub struct UI {
 
     context: Context,
 
-    root: ElementRef,
+    root: usize,
     elements: Slab<Box<Element>>,
-    parents: Slab<Option<ElementRef>>,
-    children: Slab<Vec<ElementRef>>,
+    parents: Slab<Option<usize>>,
+    children: Slab<Vec<usize>>,
     layout: Slab<BoundingBox>,
-    listeners: Slab<Option<Box<Fn(&mut EventContext, ElementEvent)>>>,
+    components: Slab<Box<UnsafeAny>>,
+
+    element_listeners: Slab<AnyMap>,
+    component_listeners: Slab<AnyMap>,
 
     dynamics: Slab<Rc<Fn(&mut TreeContext) -> ElementRef>>,
-    dynamic_indices: Slab<ElementRef>,
+    dynamic_indices: Slab<usize>,
 
-    under_cursor: Vec<ElementRef>,
-    focus: Option<ElementRef>,
-    mouse_focus: Option<ElementRef>,
+    under_cursor: Vec<usize>,
+    focus: Option<usize>,
+    mouse_focus: Option<usize>,
     input_state: InputState,
 }
 
@@ -390,12 +387,15 @@ impl UI {
 
             context: Context::new(),
 
-            root: ElementRef(0),
+            root: 0,
             elements: Slab::new(),
             parents: Slab::new(),
             children: Slab::new(),
             layout: Slab::new(),
-            listeners: Slab::new(),
+            components: Slab::new(),
+
+            element_listeners: Slab::new(),
+            component_listeners: Slab::new(),
 
             dynamics: Slab::new(),
             dynamic_indices: Slab::new(),
@@ -427,33 +427,50 @@ impl UI {
     /* tree */
 
     pub fn root(&mut self, element: ElementRef) {
-        self.root = element;
+        self.root = element.index;
         self.layout();
     }
 
     pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
-        let element = ElementRef(self.elements.insert(Box::new(element)));
+        let index = self.elements.insert(Box::new(element));
         self.parents.insert(None);
         let mut children_vec = Vec::new();
-        children_vec.extend_from_slice(children);
-        self.children.insert(children_vec);
         for child in children {
-            self.parents[child.0] = Some(element);
+            children_vec.push(child.index);
+            self.parents[child.index] = Some(index);
         }
+        self.children.insert(children_vec);
         self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
-        self.listeners.insert(None);
-        element
+        self.element_listeners.insert(AnyMap::new());
+        ElementRef { index: index, component: None }
     }
 
     pub fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
         let element = self.element(Empty, &[]);
         self.dynamics.insert(Rc::new(f));
-        self.dynamic_indices.insert(element);
+        self.dynamic_indices.insert(element.index);
         element
     }
 
-    pub fn listen<F: Fn(&mut EventContext, ElementEvent) + 'static>(&mut self, element: ElementRef, listener: F) {
-        self.listeners[element.0] = Some(Box::new(listener));
+    pub fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E)) {
+        let callback = Box::new(move |component: &mut UnsafeAny, context: &mut EventContext, event: E| {
+            callback(unsafe { component.downcast_mut_unchecked() }, context, event);
+        });
+        if let Some(component) = element.component {
+            self.component_listeners[component].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut EventContext, E)>)>((listener.index, callback));
+        } else {
+            self.element_listeners[element.index].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut EventContext, E)>)>((listener.index, callback));
+        }
+    }
+
+    pub fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
+        let index = self.components.insert(Box::new(component));
+        self.component_listeners.insert(AnyMap::new());
+        ComponentRef::new(index)
+    }
+
+    pub fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef {
+        ElementRef { index: element.index, component: Some(component.index) }
     }
 
     pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
@@ -527,14 +544,14 @@ impl UI {
                     self.mouse_focus
                 } else {
                     let mut i = 0;
-                    let handler = if self.layout[self.root.0].contains_point(self.input_state.mouse_position) {
+                    let handler = if self.layout[self.root].contains_point(self.input_state.mouse_position) {
                         let mut element = self.root;
                         loop {
                             if i < self.under_cursor.len() {
                                 if element != self.under_cursor[i] {
                                     let mut old_under_cursor = self.under_cursor.split_off(i);
                                     for child in old_under_cursor {
-                                        if let Some(response) = self.fire_event(child, ElementEvent::MouseLeave) {
+                                        if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
                                             ui_response.merge(response);
                                         }
                                     }
@@ -542,15 +559,15 @@ impl UI {
                             }
                             if i >= self.under_cursor.len() {
                                 self.under_cursor.push(element);
-                                if let Some(response) = self.fire_event(element, ElementEvent::MouseEnter) {
+                                if let Some(response) = self.fire_event::<ElementEvent>(element, ElementEvent::MouseEnter) {
                                     ui_response.merge(response);
                                 }
                             }
                             i += 1;
 
                             let mut found = false;
-                            for child in self.children[element.0].iter() {
-                                if self.layout[child.0].contains_point(self.input_state.mouse_position) {
+                            for child in self.children[element].iter() {
+                                if self.layout[*child].contains_point(self.input_state.mouse_position) {
                                     element = *child;
                                     found = true;
                                     break;
@@ -568,7 +585,7 @@ impl UI {
 
                     let mut old_under_cursor = self.under_cursor.split_off(i);
                     for child in old_under_cursor {
-                        if let Some(response) = self.fire_event(child, ElementEvent::MouseLeave) {
+                        if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
                             ui_response.merge(response);
                         }
                     }
@@ -590,24 +607,24 @@ impl UI {
         ui_response
     }
 
-    fn bubble_event(&mut self, element: ElementRef, event: ElementEvent) -> Option<UIEventResponse> {
+    fn bubble_event(&mut self, element: usize, event: ElementEvent) -> Option<UIEventResponse> {
         let mut handler = Some(element);
         let mut response = None;
         while let Some(element) = handler {
-            response = self.fire_event(element, event);
+            response = self.fire_event::<ElementEvent>(element, event);
             if response.is_some() {
                 break;
             } else {
-                handler = self.parents[element.0];
+                handler = self.parents[element];
             }
         }
         response
     }
 
-    fn fire_event(&mut self, element: ElementRef, event: ElementEvent) -> Option<UIEventResponse> {
-        if let Some(ref callback) = self.listeners[element.0] {
+    fn fire_event<E: 'static>(&mut self, element: usize, event: E) -> Option<UIEventResponse> {
+        if let Some((listener, ref callback)) = self.element_listeners[element].get::<(usize, Box<Fn(&mut UnsafeAny, &mut EventContext, E)>)>() {
             let mut context = EventContext::new(&mut self.context, &self.input_state, &mut self.focus, &mut self.mouse_focus);
-            callback(&mut context, event);
+            callback(&mut *self.components[*listener], &mut context, event);
             Some(context.response)
         } else {
             None
@@ -625,7 +642,7 @@ impl UI {
         }
         for i in 0..self.dynamics.len() {
             let f = self.dynamics[i].clone();
-            self.children[self.dynamic_indices[i].0] = vec![f(&mut TreeContext(self))];
+            self.children[self.dynamic_indices[i]] = vec![f(&mut TreeContext(self)).index];
         }
         self.layout();
     }
@@ -638,9 +655,9 @@ impl UI {
         list
     }
 
-    fn display_element(&self, element: ElementRef, list: &mut DisplayList) {
-        self.elements[element.0].display(&ElementContext(&self.context), self.layout[element.0], list);
-        for child in self.children[element.0].iter() {
+    fn display_element(&self, element: usize, list: &mut DisplayList) {
+        self.elements[element].display(&ElementContext(&self.context), self.layout[element], list);
+        for child in self.children[element].iter() {
             self.display_element(*child, list);
         }
     }
@@ -653,16 +670,16 @@ impl UI {
         Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
     }
 
-    fn child_delegate<'a>(context: &'a Context, children: &'a Slab<Vec<ElementRef>>, elements: &'a Slab<Box<Element>>, reference: ElementRef) -> ChildDelegate<'a> {
+    fn child_delegate<'a>(context: &'a Context, children: &'a Slab<Vec<usize>>, elements: &'a Slab<Box<Element>>, reference: usize) -> ChildDelegate<'a> {
         let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
-        let children_indices = &children[reference.0];
+        let children_indices = &children[reference];
         child_delegates.reserve(children_indices.len());
         for child in children_indices {
             child_delegates.push(Self::child_delegate(context, children, elements, *child));
         }
         ChildDelegate {
             reference: reference,
-            element: &*elements[reference.0],
+            element: &*elements[reference],
             context: context,
             bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
             children: child_delegates,
@@ -671,8 +688,8 @@ impl UI {
 
     fn commit_delegates(layout: &mut Slab<BoundingBox>, delegate: ChildDelegate, offset: Point) {
         let offset = offset + delegate.bounds.pos;
-        layout[delegate.reference.0].pos = offset;
-        layout[delegate.reference.0].size = delegate.bounds.size;
+        layout[delegate.reference].pos = offset;
+        layout[delegate.reference].size = delegate.bounds.size;
         for child in delegate.children {
             Self::commit_delegates(layout, child, offset);
         }
@@ -953,23 +970,22 @@ enum ButtonState {
 }
 
 pub struct Button {
-    text: RefOrValue<String>,
-    style: Ref<TextStyle>,
-    on_click: Option<Box<Fn(&mut EventContext)>>,
+    state: Prop<ButtonState>,
 }
 
+pub struct ClickEvent;
+
 impl Button {
-    pub fn with_text(text: RefOrValue<String>, style: Ref<TextStyle>) -> Button {
-        Button { text: text, style: style, on_click: None }
+    pub fn with_text(ui: &mut impl Install, text: RefOrValue<String>, style: Ref<TextStyle>) -> ElementRef {
+        let text = Text::new(text, style).install(ui);
+        Button::install(ui, text)
     }
 
-    pub fn on_click<F: Fn(&mut EventContext) + 'static>(mut self, on_click: F) -> Button {
-        self.on_click = Some(Box::new(on_click));
-        self
-    }
-
-    pub fn install(self, ui: &mut impl Install) -> ElementRef {
+    pub fn install(ui: &mut impl Install, child: ElementRef) -> ElementRef {
         let state = ui.prop(ButtonState::Up);
+
+        let button = ui.component(Button { state: state });
+
         let color = ui.map(state, |state| {
             match state {
                 ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
@@ -978,38 +994,33 @@ impl Button {
             }
         });
 
-        let text = self.text;
-        let style = self.style;
-        let on_click = self.on_click;
+        let padding = Padding::new(10.0f32.into()).install(ui, child);
+        let background = BackgroundColor::new(color.into()).install(ui, padding);
 
-        let text = Text::new(text, style).install(ui);
+        ui.listen(background, button, Self::handle);
 
-        let padding = Padding::new(10.0f32.into()).install(ui, text);
-        let button = BackgroundColor::new(color.into()).install(ui, padding);
-        ui.listen(button, move |ctx, event| {
-            match event {
-                ElementEvent::MouseEnter => {
-                    ctx.set(state, ButtonState::Hover);
-                }
-                ElementEvent::MouseLeave => {
-                    ctx.set(state, ButtonState::Up);
-                }
-                ElementEvent::MousePress(MouseButton::Left) => {
-                    ctx.set(state, ButtonState::Down);
-                }
-                ElementEvent::MouseRelease(MouseButton::Left) => {
-                    if *ctx.get(state) == ButtonState::Down {
-                        ctx.set(state, ButtonState::Hover);
-                        if let Some(ref on_click) = on_click {
-                            on_click(ctx);
-                        }
-                    }
-                }
-                _ => {}
+        ui.bind(button, background)
+    }
+
+    fn handle(&mut self, ctx: &mut EventContext, event: ElementEvent) {
+        match event {
+            ElementEvent::MouseEnter => {
+                ctx.set(self.state, ButtonState::Hover);
             }
-        });
-
-        button
+            ElementEvent::MouseLeave => {
+                ctx.set(self.state, ButtonState::Up);
+            }
+            ElementEvent::MousePress(MouseButton::Left) => {
+                ctx.set(self.state, ButtonState::Down);
+            }
+            ElementEvent::MouseRelease(MouseButton::Left) => {
+                if *ctx.get(self.state) == ButtonState::Down {
+                    ctx.set(self.state, ButtonState::Hover);
+                    ctx.fire::<ClickEvent>(ClickEvent);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
