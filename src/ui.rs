@@ -182,21 +182,19 @@ impl<'a> ElementContext<'a> {
     }
 }
 
-pub struct EventContext<'a> {
+pub struct ComponentContext<'a, C> {
+    component: ComponentRef<C>,
     context: &'a mut Context,
-    input_state: &'a InputState,
-    focus: &'a mut Option<usize>,
-    mouse_focus: &'a mut Option<usize>,
+    input_state: &'a mut InputState,
     response: UIEventResponse,
 }
 
-impl<'a> EventContext<'a> {
-    fn new<'b>(context: &'b mut Context, input_state: &'b InputState, focus: &'b mut Option<usize>, mouse_focus: &'b mut Option<usize>) -> EventContext<'b> {
-        EventContext {
+impl<'a, C> ComponentContext<'a, C> {
+    fn new<'b>(component: ComponentRef<C>, context: &'b mut Context, input_state: &'b mut InputState) -> ComponentContext<'b, C> {
+        ComponentContext {
+            component: component,
             context: context,
             input_state: input_state,
-            focus: focus,
-            mouse_focus: mouse_focus,
             response: UIEventResponse::default(),
         }
     }
@@ -214,7 +212,7 @@ impl<'a> EventContext<'a> {
     }
 
     pub fn focus(&mut self, element: ElementRef) {
-        *self.focus = Some(element.index);
+        self.input_state.focus = Some(element.index);
     }
 
     pub fn fire<E: 'static>(&mut self, event: E) {
@@ -222,18 +220,18 @@ impl<'a> EventContext<'a> {
     }
 
     pub fn defocus(&mut self, element: ElementRef) {
-        if *self.focus == Some(element.index) {
-            *self.focus = None;
+        if self.input_state.focus == Some(element.index) {
+            self.input_state.focus = None;
         }
     }
 
     pub fn capture_mouse(&mut self, element: ElementRef) {
-        *self.mouse_focus = Some(element.index);
+        self.input_state.mouse_focus = Some(element.index);
     }
 
     pub fn relinquish_mouse(&mut self, element: ElementRef) {
-        if *self.mouse_focus == Some(element.index) {
-            *self.mouse_focus = None;
+        if self.input_state.mouse_focus == Some(element.index) {
+            self.input_state.mouse_focus = None;
         }
     }
 
@@ -282,7 +280,7 @@ impl<'b> GetProperty for ElementContext<'b> {
     }
 }
 
-impl<'b> GetProperty for EventContext<'b> {
+impl<'b, C> GetProperty for ComponentContext<'b, C> {
     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
         self.get(reference)
     }
@@ -297,7 +295,7 @@ impl<'b> GetProperty for TreeContext<'b> {
 pub trait Install {
     fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef;
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef;
-    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E));
+    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E));
     fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C>;
     fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef;
     fn prop<A: 'static>(&mut self, value: A) -> Prop<A>;
@@ -311,7 +309,7 @@ impl Install for UI {
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
         self.tree(f)
     }
-    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E)) {
+    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E)) {
         self.listen(element, listener, callback);
     }
     fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
@@ -335,7 +333,7 @@ impl<'b> Install for TreeContext<'b> {
     fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
         self.0.tree(f)
     }
-    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E)) {
+    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E)) {
         self.0.listen(element, listener, callback);
     }
     fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
@@ -374,8 +372,6 @@ pub struct UI {
     dynamic_indices: Slab<usize>,
 
     under_cursor: Vec<usize>,
-    focus: Option<usize>,
-    mouse_focus: Option<usize>,
     input_state: InputState,
 }
 
@@ -401,8 +397,6 @@ impl UI {
             dynamic_indices: Slab::new(),
 
             under_cursor: Vec::new(),
-            focus: None,
-            mouse_focus: None,
             input_state: InputState::default(),
         };
 
@@ -452,14 +446,16 @@ impl UI {
         element
     }
 
-    pub fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut EventContext, E)) {
-        let callback = Box::new(move |component: &mut UnsafeAny, context: &mut EventContext, event: E| {
-            callback(unsafe { component.downcast_mut_unchecked() }, context, event);
+    pub fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E)) {
+        let callback = Box::new(move |component: &mut UnsafeAny, context: &mut Context, input_state: &mut InputState, event: E| {
+            let mut component_context = ComponentContext::new(listener, context, input_state);
+            callback(unsafe { component.downcast_mut_unchecked() }, &mut component_context, event);
+            component_context.response
         });
         if let Some(component) = element.component {
-            self.component_listeners[component].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut EventContext, E)>)>((listener.index, callback));
+            self.component_listeners[component].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>((listener.index, callback));
         } else {
-            self.element_listeners[element.index].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut EventContext, E)>)>((listener.index, callback));
+            self.element_listeners[element.index].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>((listener.index, callback));
         }
     }
 
@@ -540,8 +536,8 @@ impl UI {
 
         let handler = match event {
             InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
-                if self.mouse_focus.is_some() {
-                    self.mouse_focus
+                if self.input_state.mouse_focus.is_some() {
+                    self.input_state.mouse_focus
                 } else {
                     let mut i = 0;
                     let handler = if self.layout[self.root].contains_point(self.input_state.mouse_position) {
@@ -594,7 +590,7 @@ impl UI {
                 }
             },
             InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
-                self.focus.or(Some(self.root))
+                self.input_state.focus.or(Some(self.root))
             }
         };
 
@@ -622,10 +618,8 @@ impl UI {
     }
 
     fn fire_event<E: 'static>(&mut self, element: usize, event: E) -> Option<UIEventResponse> {
-        if let Some((listener, ref callback)) = self.element_listeners[element].get::<(usize, Box<Fn(&mut UnsafeAny, &mut EventContext, E)>)>() {
-            let mut context = EventContext::new(&mut self.context, &self.input_state, &mut self.focus, &mut self.mouse_focus);
-            callback(&mut *self.components[*listener], &mut context, event);
-            Some(context.response)
+        if let Some((listener, ref callback)) = self.element_listeners[element].get::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>() {
+            Some(callback(&mut *self.components[*listener], &mut self.context, &mut self.input_state, event))
         } else {
             None
         }
@@ -702,6 +696,8 @@ struct InputState {
     mouse_middle_pressed: bool,
     mouse_right_pressed: bool,
     modifiers: KeyboardModifiers,
+    focus: Option<usize>,
+    mouse_focus: Option<usize>,
 }
 
 impl Default for InputState {
@@ -712,6 +708,8 @@ impl Default for InputState {
             mouse_middle_pressed: false,
             mouse_right_pressed: false,
             modifiers: KeyboardModifiers::default(),
+            focus: None,
+            mouse_focus: None,
         }
     }
 }
@@ -1002,7 +1000,7 @@ impl Button {
         ui.bind(button, background)
     }
 
-    fn handle(&mut self, ctx: &mut EventContext, event: ElementEvent) {
+    fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
         match event {
             ElementEvent::MouseEnter => {
                 ctx.set(self.state, ButtonState::Hover);
