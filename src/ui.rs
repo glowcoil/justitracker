@@ -18,9 +18,14 @@ use render::*;
 
 /* references */
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct ElementRef {
+    index: usize,
+    component: Option<usize>,
+}
+
 macro_rules! reference {
     ($type:ident) => {
-        #[derive(Eq, PartialEq)]
         pub struct $type<A> {
             index: usize,
             phantom_data: PhantomData<*const A>,
@@ -48,39 +53,52 @@ macro_rules! reference {
     }
 }
 
-reference! { ElementRef }
+reference! { Prop }
+reference! { Ref }
 reference! { ComponentRef }
 
-// pub enum RefOrValue<A> {
-//     Ref(Ref<A>),
-//     Value(A),
-// }
+impl<A> From<Prop<A>> for Ref<A> {
+    fn from(prop: Prop<A>) -> Ref<A> {
+        Ref::new(prop.index)
+    }
+}
 
-// impl<A: 'static> RefOrValue<A> {
-//     fn get<'a, C: GetProperty>(&'a self, context: &'a C) -> &'a A {
-//         match *self {
-//             RefOrValue::Ref(reference) => context.get(reference),
-//             RefOrValue::Value(ref value) => value,
-//         }
-//     }
-// }
+pub enum RefOrValue<A> {
+    Ref(Ref<A>),
+    Value(A),
+}
 
-// impl<A> From<Ref<A>> for RefOrValue<A> {
-//     fn from(reference: Ref<A>) -> RefOrValue<A> {
-//         RefOrValue::Ref(reference)
-//     }
-// }
+impl<A: 'static> RefOrValue<A> {
+    fn get<'a, C: GetProperty>(&'a self, context: &'a C) -> &'a A {
+        match *self {
+            RefOrValue::Ref(reference) => context.get(reference),
+            RefOrValue::Value(ref value) => value,
+        }
+    }
+}
 
-// impl<A> From<A> for RefOrValue<A> {
-//     fn from(value: A) -> RefOrValue<A> {
-//         RefOrValue::Value(value)
-//     }
-// }
+impl<A> From<Prop<A>> for RefOrValue<A> {
+    fn from(prop: Prop<A>) -> RefOrValue<A> {
+        RefOrValue::Ref(Ref::new(prop.index))
+    }
+}
+
+impl<A> From<Ref<A>> for RefOrValue<A> {
+    fn from(reference: Ref<A>) -> RefOrValue<A> {
+        RefOrValue::Ref(reference)
+    }
+}
+
+impl<A> From<A> for RefOrValue<A> {
+    fn from(value: A) -> RefOrValue<A> {
+        RefOrValue::Value(value)
+    }
+}
 
 /* element */
 
 pub trait Element {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, _context: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -91,19 +109,20 @@ pub trait Element {
         (width, height)
     }
 
-    fn display(&self, _bounds: BoundingBox, _list: &mut DisplayList) {}
+    fn display(&self, _context: &ElementContext, _bounds: BoundingBox, _list: &mut DisplayList) {}
 }
 
 pub struct ChildDelegate<'a> {
     reference: usize,
     element: &'a Element,
+    context: &'a Context,
     bounds: BoundingBox,
     children: Vec<ChildDelegate<'a>>,
 }
 
 impl<'a> ChildDelegate<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        let (width, height) = self.element.layout(max_width, max_height, &mut self.children);
+        let (width, height) = self.element.layout(&ElementContext(self.context), max_width, max_height, &mut self.children);
         self.bounds.size.x = width;
         self.bounds.size.y = height;
         (width, height)
@@ -152,6 +171,14 @@ impl Context {
 
     fn get_prop<'a, A: 'static>(props: &'a Slab<Box<UnsafeAny>>, reference: Ref<A>) -> &'a A {
         &*unsafe { props[reference.index].downcast_ref_unchecked() }
+    }
+}
+
+pub struct ElementContext<'a>(&'a Context);
+
+impl<'a> ElementContext<'a> {
+    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
+        self.0.get(reference)
     }
 }
 
@@ -242,6 +269,12 @@ pub trait GetProperty {
 }
 
 impl GetProperty for Context {
+    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
+        self.get(reference)
+    }
+}
+
+impl<'b> GetProperty for ElementContext<'b> {
     fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
         self.get(reference)
     }
@@ -617,7 +650,7 @@ impl UI {
     }
 
     fn display_element(&self, element: usize, list: &mut DisplayList) {
-        self.elements[element].display(self.layout[element], list);
+        self.elements[element].display(&ElementContext(&self.context), self.layout[element], list);
         for child in self.children[element].iter() {
             self.display_element(*child, list);
         }
@@ -641,6 +674,7 @@ impl UI {
         ChildDelegate {
             reference: reference,
             element: &*elements[reference],
+            context: context,
             bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
             children: child_delegates,
         }
@@ -697,11 +731,11 @@ impl Element for Empty {}
 
 
 pub struct BackgroundColor {
-    color: [f32; 4],
+    color: RefOrValue<[f32; 4]>,
 }
 
 impl BackgroundColor {
-    pub fn new(color: [f32; 4]) -> BackgroundColor {
+    pub fn new(color: RefOrValue<[f32; 4]>) -> BackgroundColor {
         BackgroundColor { color: color }
     }
 
@@ -711,18 +745,18 @@ impl BackgroundColor {
 }
 
 impl Element for BackgroundColor {
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
+    fn display(&self, ctx: &ElementContext, bounds: BoundingBox, list: &mut DisplayList) {
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *self.color.get(ctx) });
     }
 }
 
 
 pub struct Container {
-    max_size: (f32, f32),
+    max_size: RefOrValue<(f32, f32)>,
 }
 
 impl Container {
-    pub fn new(max_size: (f32, f32)) -> Container {
+    pub fn new(max_size: RefOrValue<(f32, f32)>) -> Container {
         Container { max_size: max_size }
     }
 
@@ -732,9 +766,10 @@ impl Container {
 }
 
 impl Element for Container {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let max_width = self.max_width.min(max_width);
-        let max_height = self.max_height.min(max_height);
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let (self_max_width, self_max_height) = *self.max_size.get(ctx);
+        let max_width = self_max_width.min(max_width);
+        let max_height = self_max_height.min(max_height);
 
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -750,11 +785,11 @@ impl Element for Container {
 
 
 pub struct Padding {
-    padding: f32,
+    padding: RefOrValue<f32>,
 }
 
 impl Padding {
-    pub fn new(padding: f32) -> Padding {
+    pub fn new(padding: RefOrValue<f32>) -> Padding {
         Padding { padding: padding }
     }
 
@@ -764,26 +799,27 @@ impl Padding {
 }
 
 impl Element for Padding {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let padding = *self.padding.get(ctx);
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
-            let (child_width, child_height) = child.layout(max_width - 2.0 * self.padding, max_height - 2.0 * self.padding);
+            let (child_width, child_height) = child.layout(max_width - 2.0 * padding, max_height - 2.0 * padding);
             width = width.max(child_width);
             height = height.max(child_height);
-            child.offset(self.padding, self.padding);
+            child.offset(padding, padding);
         }
-        (width + 2.0 * self.padding, height + 2.0 * self.padding)
+        (width + 2.0 * padding, height + 2.0 * padding)
     }
 }
 
 
 pub struct Row {
-    spacing: f32,
+    spacing: RefOrValue<f32>,
 }
 
 impl Row {
-    pub fn new(spacing: f32) -> Row {
+    pub fn new(spacing: RefOrValue<f32>) -> Row {
         Row { spacing: spacing }
     }
 
@@ -793,26 +829,27 @@ impl Row {
 }
 
 impl Element for Row {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let spacing = *self.spacing.get(ctx);
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
             let (child_width, child_height) = child.layout(max_width - x, max_height);
             child.offset(x, 0.0);
-            x += child_width + self.spacing;
+            x += child_width + spacing;
             height = height.max(child_height);
         }
-        (x - self.spacing, height)
+        (x - spacing, height)
     }
 }
 
 
 pub struct Col {
-    spacing: f32,
+    spacing: RefOrValue<f32>,
 }
 
 impl Col {
-    pub fn new(spacing: f32) -> Col {
+    pub fn new(spacing: RefOrValue<f32>) -> Col {
         Col { spacing: spacing }
     }
 
@@ -822,33 +859,34 @@ impl Col {
 }
 
 impl Element for Col {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
+        let spacing = *self.spacing.get(ctx);
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
         for child in children {
             let (child_width, child_height) = child.layout(max_width, max_height - y);
             child.offset(0.0, y);
             width = width.max(child_width);
-            y += child_height + self.spacing;
+            y += child_height + spacing;
         }
-        (width, y - self.spacing)
+        (width, y - spacing)
     }
 }
 
 
 pub struct TextStyle {
-    pub font: Rc<Font<'static>>,
+    pub font: Font<'static>,
     pub scale: Scale,
 }
 
 pub struct Text {
-    text: String,
-    style: TextStyle,
+    text: RefOrValue<String>,
+    style: Ref<TextStyle>,
     glyphs: RefCell<Vec<PositionedGlyph<'static>>>,
 }
 
 impl Text {
-    pub fn new(text: String, style: TextStyle) -> Text {
+    pub fn new(text: RefOrValue<String>, style: Ref<TextStyle>) -> Text {
         Text { text: text, style: style, glyphs: RefCell::new(Vec::new()) }
     }
 
@@ -906,11 +944,14 @@ impl Text {
 }
 
 impl Element for Text {
-    fn layout(&self, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
-        self.layout_text(self.text, max_width, max_height, &self.style.font, self.style.scale)
+    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
+        let text = self.text.get(ctx);
+        let style = ctx.get(self.style);
+
+        self.layout_text(text, max_width, max_height, &style.font, style.scale)
     }
 
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, _ctx: &ElementContext, bounds: BoundingBox, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
             list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
