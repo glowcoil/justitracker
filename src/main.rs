@@ -81,162 +81,165 @@ fn main() {
     let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
     let font = collection.into_font().unwrap();
 
-    let style = ui.prop(TextStyle { font: font, scale: Scale::uniform(14.0) });
+    let style = TextStyle { font: font, scale: Scale::uniform(14.0) };
 
-    // let song = ui.prop(Song::default());
-    // let audio_send = start_audio_thread();
-    // let cursor = ui.prop((0, 0));
+    // ui.root().place(BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
+    ui.root().place(Text::new("lorem ipsum dolor sit amet".to_string(), style));
 
-    let play = Button::with_text(&mut ui, "play".to_string().into(), style.into());
-    let stop = Button::with_text(&mut ui, "stop".to_string().into(), style.into());
-    // let bpm_label = Text::new("bpm:".to_string().into(), style.into()).install(&mut ui);
-    // let bpm = ui.prop(120);
-    // let bpm_input = IntegerInput::new(bpm, style.into())
-    //     .on_change({
-    //         let audio_send = audio_send.clone();
-    //         move |ctx, value| {
-    //             ctx.get_mut(song).bpm = value as u32;
-    //             audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
-    //         }
-    //     })
-    //     .install(&mut ui);
-    // let ptn_len_label = Text::new("len:".to_string().into(), style.into()).install(&mut ui);
-    // let ptn_len = ui.prop(8);
-    // let ptn_len_input = IntegerInput::new(ptn_len, style.into())
-    //     .on_change({
-    //         let audio_send = audio_send.clone();
-    //         move |ctx, value| {
-    //             let value = value.max(1) as usize;
-    //             ctx.set(ptn_len, value as i32);
+    // // let song = ui.prop(Song::default());
+    // // let audio_send = start_audio_thread();
+    // // let cursor = ui.prop((0, 0));
 
-    //             if value < ctx.get(song).ptn_len {
-    //                 for track in 0..ctx.get(song).notes.len() {
-    //                     ctx.get_mut(song).notes[track].truncate(value);
-    //                 }
-    //             } else if value > ctx.get(song).ptn_len {
-    //                 for track in 0..ctx.get(song).notes.len() {
-    //                     ctx.get_mut(song).notes[track].resize(value, Note::None);
-    //                 }
-    //             }
+    // let play = Button::with_text(&mut ui, "play".to_string().into(), style.into());
+    // let stop = Button::with_text(&mut ui, "stop".to_string().into(), style.into());
+    // // let bpm_label = Text::new("bpm:".to_string().into(), style.into()).install(&mut ui);
+    // // let bpm = ui.prop(120);
+    // // let bpm_input = IntegerInput::new(bpm, style.into())
+    // //     .on_change({
+    // //         let audio_send = audio_send.clone();
+    // //         move |ctx, value| {
+    // //             ctx.get_mut(song).bpm = value as u32;
+    // //             audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+    // //         }
+    // //     })
+    // //     .install(&mut ui);
+    // // let ptn_len_label = Text::new("len:".to_string().into(), style.into()).install(&mut ui);
+    // // let ptn_len = ui.prop(8);
+    // // let ptn_len_input = IntegerInput::new(ptn_len, style.into())
+    // //     .on_change({
+    // //         let audio_send = audio_send.clone();
+    // //         move |ctx, value| {
+    // //             let value = value.max(1) as usize;
+    // //             ctx.set(ptn_len, value as i32);
 
-    //             ctx.get_mut(song).ptn_len = value;
-
-    //             audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
-    //         }
-    //     })
-    //     .install(&mut ui);
-
-    let controls = Row::new(5.0.into()).install(&mut ui, &[play, stop]);//, bpm_label, bpm_input, ptn_len_label, ptn_len_input]);
-
-    // // for i in 0..song.notes.len() {
-    // //     let load_sample_button = Button::new("inst".to_string().into(), style)
-    // //         .on_click({
-    // //             let audio_send = audio_send.clone();
-    // //             move |ctx| {
-    // //                 if let Ok(result) = nfd::dialog().filter("wav").open() {
-    // //                     match result {
-    // //                         nfd::Response::Okay(path) => {
-    // //                             let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
-    // //                             ctx.get_mut(song).samples[i] = samples;
-    // //                             audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    // //                         }
-    // //                         _ => {}
-    // //                     }
+    // //             if value < ctx.get(song).ptn_len {
+    // //                 for track in 0..ctx.get(song).notes.len() {
+    // //                     ctx.get_mut(song).notes[track].truncate(value);
+    // //                 }
+    // //             } else if value > ctx.get(song).ptn_len {
+    // //                 for track in 0..ctx.get(song).notes.len() {
+    // //                     ctx.get_mut(song).notes[track].resize(value, Note::None);
     // //                 }
     // //             }
-    // //         })
-    // //         .install(&mut ui);
 
-    // //     // let del_button = ctx.get_slot(buttons).add_child(Button::install);
-    // //     // ctx.get_slot(del_button).add_child(Label::with_text("del"));
-    // //     // ctx.listen(del_button, move |myself: &mut Grid, mut ctx, value: ClickEvent| {
-    // //     //     myself.song.samples.remove(i);
-    // //     //     myself.song.notes.remove(i);
+    // //             ctx.get_mut(song).ptn_len = value;
 
-    // //     //     ctx.get_slot(myself.columns).remove_child(i);
-    // //     //     myself.note_columns.remove(i);
+    // //             audio_send.send(AudioMessage::Song(ctx.get(song).clone())).unwrap();
+    // //         }
+    // //     })
+    // //     .install(&mut ui);
 
-    // //     //     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    // //     // });
+    // let controls = Row::new(5.0.into()).install(&mut ui, &[play, stop]);//, bpm_label, bpm_input, ptn_len_label, ptn_len_input]);
 
-    // //     for j in 0..ptn_len {
-    // //         let note = ctx.get_slot(note_column).add_child(NoteElement::with_value(4, Note::None));
-    // //         ctx.listen(note, move |myself: &mut Grid, mut ctx, value: Note| {
-    // //             myself.song.notes[i][j] = value.clone();
-    // //             ctx.send::<Note>(note, value);
+    // // // for i in 0..song.notes.len() {
+    // // //     let load_sample_button = Button::new("inst".to_string().into(), style)
+    // // //         .on_click({
+    // // //             let audio_send = audio_send.clone();
+    // // //             move |ctx| {
+    // // //                 if let Ok(result) = nfd::dialog().filter("wav").open() {
+    // // //                     match result {
+    // // //                         nfd::Response::Okay(path) => {
+    // // //                             let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
+    // // //                             ctx.get_mut(song).samples[i] = samples;
+    // // //                             audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+    // // //                         }
+    // // //                         _ => {}
+    // // //                     }
+    // // //                 }
+    // // //             }
+    // // //         })
+    // // //         .install(&mut ui);
 
-    // //             myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
-    // //         });
-    // //     }
-    // //     let note_column = Col::new(5.0.into()).install(&mut ui, &[]);
-    // // }
+    // // //     // let del_button = ctx.get_slot(buttons).add_child(Button::install);
+    // // //     // ctx.get_slot(del_button).add_child(Label::with_text("del"));
+    // // //     // ctx.listen(del_button, move |myself: &mut Grid, mut ctx, value: ClickEvent| {
+    // // //     //     myself.song.samples.remove(i);
+    // // //     //     myself.song.notes.remove(i);
 
-    let root = Col::new(5.0.into()).install(&mut ui, &[controls]);
-    // ui.listen(root, |ctx, event| {
-    //     // match event {
-    //     //     InputEvent::KeyPress { button } => {
-    //     //         match button {
-    //     //             KeyboardButton::Up | KeyboardButton::Down | KeyboardButton::Left | KeyboardButton::Right => {
-    //     //                 let cursor_note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
-    //     //                 ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
+    // // //     //     ctx.get_slot(myself.columns).remove_child(i);
+    // // //     //     myself.note_columns.remove(i);
 
-    //     //                 match button {
-    //     //                     KeyboardButton::Up => { self.cursor.1 = self.cursor.1.saturating_sub(1); }
-    //     //                     KeyboardButton::Down => { self.cursor.1 = (self.cursor.1 + 1).min(self.song.ptn_length.saturating_sub(1)); }
-    //     //                     KeyboardButton::Left => { self.cursor.0 = self.cursor.0.saturating_sub(1); }
-    //     //                     KeyboardButton::Right => { self.cursor.0 = (self.cursor.0 + 1).min(self.song.notes.len().saturating_sub(1)); }
-    //     //                     _ => {}
-    //     //                 }
+    // // //     //     myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+    // // //     // });
 
-    //     //                 let cursor_note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
-    //     //                 ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
-    //     //             }
-    //     //             KeyboardButton::Key1 | KeyboardButton::Key2 | KeyboardButton::Key3 | KeyboardButton::Key4 => {
-    //     //                 match self.song.notes[self.cursor.0][self.cursor.1] {
-    //     //                     Note::Off | Note::None => { self.song.notes[self.cursor.0][self.cursor.1] = Note::On(vec![0; 4]); }
-    //     //                     _ => {}
-    //     //                 }
+    // // //     for j in 0..ptn_len {
+    // // //         let note = ctx.get_slot(note_column).add_child(NoteElement::with_value(4, Note::None));
+    // // //         ctx.listen(note, move |myself: &mut Grid, mut ctx, value: Note| {
+    // // //             myself.song.notes[i][j] = value.clone();
+    // // //             ctx.send::<Note>(note, value);
 
-    //     //                 let delta = if ctx.get_input_state().modifiers.shift { -1 } else { 1 };
-    //     //                 if let Note::On(ref mut factors) = self.song.notes[self.cursor.0].get_mut(self.cursor.1).unwrap() {
-    //     //                     match button {
-    //     //                         KeyboardButton::Key1 => { factors[0] += delta; }
-    //     //                         KeyboardButton::Key2 => { factors[1] += delta; }
-    //     //                         KeyboardButton::Key3 => { factors[2] += delta; }
-    //     //                         KeyboardButton::Key4 => { factors[3] += delta }
-    //     //                         _ => {}
-    //     //                     }
-    //     //                 }
+    // // //             myself.audio_send.send(AudioMessage::Song(myself.song.clone())).unwrap();
+    // // //         });
+    // // //     }
+    // // //     let note_column = Col::new(5.0.into()).install(&mut ui, &[]);
+    // // // }
 
-    //     //                 let note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
-    //     //                 ctx.send::<Note>(note, self.song.notes[self.cursor.0][self.cursor.1].clone());
+    // let root = Col::new(5.0.into()).install(&mut ui, &[controls]);
+    // // ui.listen(root, |ctx, event| {
+    // //     // match event {
+    // //     //     InputEvent::KeyPress { button } => {
+    // //     //         match button {
+    // //     //             KeyboardButton::Up | KeyboardButton::Down | KeyboardButton::Left | KeyboardButton::Right => {
+    // //     //                 let cursor_note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
+    // //     //                 ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.0, 0.0, 0.0, 0.0]));
 
-    //     //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-    //     //             }
-    //     //             KeyboardButton::Back | KeyboardButton::Delete => {
-    //     //                 self.song.notes[self.cursor.0][self.cursor.1] = Note::None;
+    // //     //                 match button {
+    // //     //                     KeyboardButton::Up => { self.cursor.1 = self.cursor.1.saturating_sub(1); }
+    // //     //                     KeyboardButton::Down => { self.cursor.1 = (self.cursor.1 + 1).min(self.song.ptn_length.saturating_sub(1)); }
+    // //     //                     KeyboardButton::Left => { self.cursor.0 = self.cursor.0.saturating_sub(1); }
+    // //     //                     KeyboardButton::Right => { self.cursor.0 = (self.cursor.0 + 1).min(self.song.notes.len().saturating_sub(1)); }
+    // //     //                     _ => {}
+    // //     //                 }
 
-    //     //                 let note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
-    //     //                 ctx.send::<Note>(note, self.song.notes[self.cursor.0][self.cursor.1].clone());
+    // //     //                 let cursor_note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
+    // //     //                 ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
+    // //     //             }
+    // //     //             KeyboardButton::Key1 | KeyboardButton::Key2 | KeyboardButton::Key3 | KeyboardButton::Key4 => {
+    // //     //                 match self.song.notes[self.cursor.0][self.cursor.1] {
+    // //     //                     Note::Off | Note::None => { self.song.notes[self.cursor.0][self.cursor.1] = Note::On(vec![0; 4]); }
+    // //     //                     _ => {}
+    // //     //                 }
 
-    //     //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-    //     //             }
-    //     //             KeyboardButton::Grave => {
-    //     //                 self.song.notes[self.cursor.0][self.cursor.1] = Note::Off;
+    // //     //                 let delta = if ctx.get_input_state().modifiers.shift { -1 } else { 1 };
+    // //     //                 if let Note::On(ref mut factors) = self.song.notes[self.cursor.0].get_mut(self.cursor.1).unwrap() {
+    // //     //                     match button {
+    // //     //                         KeyboardButton::Key1 => { factors[0] += delta; }
+    // //     //                         KeyboardButton::Key2 => { factors[1] += delta; }
+    // //     //                         KeyboardButton::Key3 => { factors[2] += delta; }
+    // //     //                         KeyboardButton::Key4 => { factors[3] += delta }
+    // //     //                         _ => {}
+    // //     //                     }
+    // //     //                 }
 
-    //     //                 let note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
-    //     //                 ctx.send::<Note>(note, self.song.notes[self.cursor.0][self.cursor.1].clone());
+    // //     //                 let note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
+    // //     //                 ctx.send::<Note>(note, self.song.notes[self.cursor.0][self.cursor.1].clone());
 
-    //     //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-    //     //             }
-    //     //             _ => {}
-    //     //         }
-    //     //     }
-    //     //     _ => {}
-    //     // }
-    // });
+    // //     //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+    // //     //             }
+    // //     //             KeyboardButton::Back | KeyboardButton::Delete => {
+    // //     //                 self.song.notes[self.cursor.0][self.cursor.1] = Note::None;
 
-    ui.root(controls);
+    // //     //                 let note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
+    // //     //                 ctx.send::<Note>(note, self.song.notes[self.cursor.0][self.cursor.1].clone());
+
+    // //     //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+    // //     //             }
+    // //     //             KeyboardButton::Grave => {
+    // //     //                 self.song.notes[self.cursor.0][self.cursor.1] = Note::Off;
+
+    // //     //                 let note = ctx.get_slot(self.note_columns[self.cursor.0]).get_child(self.cursor.1).unwrap();
+    // //     //                 ctx.send::<Note>(note, self.song.notes[self.cursor.0][self.cursor.1].clone());
+
+    // //     //                 self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+    // //     //             }
+    // //     //             _ => {}
+    // //     //         }
+    // //     //     }
+    // //     //     _ => {}
+    // //     // }
+    // // });
+
+    // ui.root(controls);
 
 
     // let add_column = ctx.get_slot(tracks).add_child(Stack::install);
@@ -258,8 +261,7 @@ fn main() {
     // ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
 
 
-    ui.update();
-    renderer.render(ui.display());
+    renderer.render(ui.paint());
 
     let mut cursor_hide = false;
     events_loop.run_forever(|ev| {
@@ -270,7 +272,7 @@ fn main() {
                 }
                 glutin::WindowEvent::Resized(w, h) => {
                     ui.resize(w as f32, h as f32);
-                    renderer.render(ui.display());
+                    renderer.render(ui.paint());
                     None
                 }
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
@@ -350,9 +352,7 @@ fn main() {
                 }
             }
 
-            ui.update();
-
-            renderer.render(ui.display());
+            renderer.render(ui.paint());
         }
 
         glutin::ControlFlow::Continue

@@ -1,10 +1,14 @@
 use unsafe_any::UnsafeAny;
 
+use std::any::TypeId;
 use std::marker::PhantomData;
 use std::f32;
-
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::mem;
+use std::ops::{Index, IndexMut};
+use std::slice::IterMut;
 
 use slab::Slab;
 use priority_queue::PriorityQueue;
@@ -16,363 +20,96 @@ use rusttype::{Font, Scale, point, PositionedGlyph};
 
 use render::*;
 
-/* references */
+/* component */
 
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub struct ElementRef {
-    index: usize,
-    component: Option<usize>,
-}
-
-macro_rules! reference {
-    ($type:ident) => {
-        pub struct $type<A> {
-            index: usize,
-            phantom_data: PhantomData<*const A>,
-        }
-
-        impl<A> Clone for $type<A> {
-            fn clone(&self) -> $type<A> {
-                $type {
-                    index: self.index,
-                    phantom_data: PhantomData,
-                }
-            }
-        }
-
-        impl<A> Copy for $type<A> {}
-
-        impl<A> $type<A> {
-            fn new(index: usize) -> $type<A> {
-                $type {
-                    index: index,
-                    phantom_data: PhantomData,
-                }
-            }
+pub trait Component {
+    fn install(&self, context: &mut InstallContext<Self>) {}
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+        if let Some(child) = children.get_mut(0) {
+            child.layout(max_width, max_height)
+        } else {
+            (0.0, 0.0)
         }
     }
+    fn paint(&self, _bounds: BoundingBox, list: &mut DisplayList) {}
 }
 
-reference! { Prop }
-reference! { Ref }
-reference! { ComponentRef }
+trait ComponentWrapper {
+    fn install(&self, region: &mut Slab<ComponentData>, id: Id);
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32);
+    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList);
+    fn get_type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
+}
 
-impl<A> From<Prop<A>> for Ref<A> {
-    fn from(prop: Prop<A>) -> Ref<A> {
-        Ref::new(prop.index)
+impl ComponentWrapper {
+    fn is<T: 'static>(&self) -> bool { self.get_type_id() == TypeId::of::<T>() }
+
+    unsafe fn downcast_ref_unchecked<T>(&self) -> &T {
+        &*(self as *const ComponentWrapper as *const T)
     }
-}
 
-pub enum RefOrValue<A> {
-    Ref(Ref<A>),
-    Value(A),
-}
-
-impl<A: 'static> RefOrValue<A> {
-    fn get<'a, C: GetProperty>(&'a self, context: &'a C) -> &'a A {
-        match *self {
-            RefOrValue::Ref(reference) => context.get(reference),
-            RefOrValue::Value(ref value) => value,
-        }
+    unsafe fn downcast_mut_unchecked<T>(&mut self) -> &mut T {
+        &mut *(self as *mut ComponentWrapper as *mut T)
     }
 }
 
-impl<A> From<Prop<A>> for RefOrValue<A> {
-    fn from(prop: Prop<A>) -> RefOrValue<A> {
-        RefOrValue::Ref(Ref::new(prop.index))
+impl<C: Component> ComponentWrapper for C {
+    fn install(&self, region: &mut Slab<ComponentData>, id: Id) {
+        self.install(&mut InstallContext { region, id, phantom_data: PhantomData });
     }
-}
-
-impl<A> From<Ref<A>> for RefOrValue<A> {
-    fn from(reference: Ref<A>) -> RefOrValue<A> {
-        RefOrValue::Ref(reference)
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+        self.layout(max_width, max_height, children)
     }
-}
-
-impl<A> From<A> for RefOrValue<A> {
-    fn from(value: A) -> RefOrValue<A> {
-        RefOrValue::Value(value)
-    }
-}
-
-/* element */
-
-pub trait Element {
-    fn layout(&self, _context: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in children {
-            let (child_width, child_height) = child.layout(max_width, max_height);
-            width = width.max(child_width);
-            height = height.max(child_height);
-        }
-        (width, height)
-    }
-
-    fn display(&self, _context: &ElementContext, _bounds: BoundingBox, _list: &mut DisplayList) {}
-}
-
-pub struct ChildDelegate<'a> {
-    reference: usize,
-    element: &'a Element,
-    context: &'a Context,
-    bounds: BoundingBox,
-    children: Vec<ChildDelegate<'a>>,
-}
-
-impl<'a> ChildDelegate<'a> {
-    pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        let (width, height) = self.element.layout(&ElementContext(self.context), max_width, max_height, &mut self.children);
-        self.bounds.size.x = width;
-        self.bounds.size.y = height;
-        (width, height)
-    }
-
-    pub fn offset(&mut self, x: f32, y: f32) {
-        self.bounds.pos.x = x;
-        self.bounds.pos.y = y;
-    }
-}
-
-pub struct Context {
-    properties: Slab<Box<UnsafeAny>>,
-    dependencies: Slab<Vec<usize>>,
-    dependents: Slab<Vec<usize>>,
-    update: Slab<Option<Box<Fn(&mut Slab<Box<UnsafeAny>>)>>>,
-    priorities: Slab<u32>,
-    queue: PriorityQueue<usize, Reverse<u32>>,
-}
-
-impl Context {
-    fn new() -> Context {
-        Context {
-            properties: Slab::new(),
-            dependencies: Slab::new(),
-            dependents: Slab::new(),
-            update: Slab::new(),
-            priorities: Slab::new(),
-            queue: PriorityQueue::new(),
-        }
-    }
-
-    pub fn get<'a, A: 'static, R: Into<Ref<A>>>(&'a self, reference: R) -> &'a A {
-        Context::get_prop(&self.properties, reference.into())
-    }
-
-    pub fn get_mut<'a, A: 'static>(&'a mut self, prop: Prop<A>) -> &'a mut A {
-        self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
-        &mut *unsafe { self.properties[prop.index].downcast_mut_unchecked() }
-    }
-
-    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
-        self.queue.push(prop.index, Reverse(self.priorities[prop.index]));
-        self.properties[prop.index] = Box::new(value);
-    }
-
-    fn get_prop<'a, A: 'static>(props: &'a Slab<Box<UnsafeAny>>, reference: Ref<A>) -> &'a A {
-        &*unsafe { props[reference.index].downcast_ref_unchecked() }
-    }
-}
-
-pub struct ElementContext<'a>(&'a Context);
-
-impl<'a> ElementContext<'a> {
-    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
-        self.0.get(reference)
-    }
-}
-
-pub struct ComponentContext<'a, C> {
-    component: ComponentRef<C>,
-    context: &'a mut Context,
-    input_state: &'a mut InputState,
-    response: UIEventResponse,
-}
-
-impl<'a, C> ComponentContext<'a, C> {
-    fn new<'b>(component: ComponentRef<C>, context: &'b mut Context, input_state: &'b mut InputState) -> ComponentContext<'b, C> {
-        ComponentContext {
-            component: component,
-            context: context,
-            input_state: input_state,
-            response: UIEventResponse::default(),
-        }
-    }
-
-    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
-        self.context.get(reference)
-    }
-
-    pub fn get_mut<'b, A: 'static>(&'b mut self, prop: Prop<A>) -> &'b mut A {
-        self.context.get_mut(prop)
-    }
-
-    pub fn set<A: 'static>(&mut self, prop: Prop<A>, value: A) {
-        self.context.set(prop, value)
-    }
-
-    pub fn focus(&mut self, element: ElementRef) {
-        self.input_state.focus = Some(element.index);
-    }
-
-    pub fn fire<E: 'static>(&mut self, event: E) {
-
-    }
-
-    pub fn defocus(&mut self, element: ElementRef) {
-        if self.input_state.focus == Some(element.index) {
-            self.input_state.focus = None;
-        }
-    }
-
-    pub fn capture_mouse(&mut self, element: ElementRef) {
-        self.input_state.mouse_focus = Some(element.index);
-    }
-
-    pub fn relinquish_mouse(&mut self, element: ElementRef) {
-        if self.input_state.mouse_focus == Some(element.index) {
-            self.input_state.mouse_focus = None;
-        }
-    }
-
-    pub fn get_mouse_position(&mut self) -> Point {
-        self.input_state.mouse_position
-    }
-
-    pub fn set_mouse_position(&mut self, position: Point) {
-        self.response.mouse_position = Some(position);
-    }
-
-    pub fn set_cursor(&mut self, cursor: MouseCursor) {
-        self.response.mouse_cursor = Some(cursor);
-    }
-
-    pub fn hide_cursor(&mut self) {
-        self.response.hide_cursor = Some(true);
-    }
-
-    pub fn show_cursor(&mut self) {
-        self.response.hide_cursor = Some(false);
-    }
-}
-
-pub struct TreeContext<'a>(&'a mut UI);
-
-impl<'a> TreeContext<'a> {
-    pub fn get<'b, A: 'static, R: Into<Ref<A>>>(&'b self, reference: R) -> &'b A {
-        self.0.context.get(reference)
-    }
-}
-
-pub trait GetProperty {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A;
-}
-
-impl GetProperty for Context {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
-
-impl<'b> GetProperty for ElementContext<'b> {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
-
-impl<'b, C> GetProperty for ComponentContext<'b, C> {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
-
-impl<'b> GetProperty for TreeContext<'b> {
-    fn get<'a, A: 'static>(&'a self, reference: Ref<A>) -> &'a A {
-        self.get(reference)
-    }
-}
-
-pub trait Install {
-    fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef;
-    fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef;
-    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E));
-    fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C>;
-    fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef;
-    fn prop<A: 'static>(&mut self, value: A) -> Prop<A>;
-    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static;
-}
-
-impl Install for UI {
-    fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
-        self.element(element, children)
-    }
-    fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
-        self.tree(f)
-    }
-    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E)) {
-        self.listen(element, listener, callback);
-    }
-    fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
-        self.component(component)
-    }
-    fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef {
-        self.bind(component, element)
-    }
-    fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.prop(value)
-    }
-    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.map(a, f)
-    }
-}
-
-impl<'b> Install for TreeContext<'b> {
-    fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
-        self.0.element(element, children)
-    }
-    fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
-        self.0.tree(f)
-    }
-    fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E)) {
-        self.0.listen(element, listener, callback);
-    }
-    fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
-        self.0.component(component)
-    }
-    fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef {
-        self.0.bind(component, element)
-    }
-    fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        self.0.prop(value)
-    }
-    fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        self.0.map(a, f)
+    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList) {
+        self.paint(bounds, list);
     }
 }
 
 /* ui */
 
+type Id = (usize, usize);
+
 pub struct UI {
     width: f32,
     height: f32,
 
-    context: Context,
+    components: Slab<Slab<ComponentData>>,
+    layout: Layout,
 
-    root: usize,
-    elements: Slab<Box<Element>>,
-    parents: Slab<Option<usize>>,
-    children: Slab<Vec<usize>>,
-    layout: Slab<BoundingBox>,
-    components: Slab<Box<UnsafeAny>>,
-
-    element_listeners: Slab<AnyMap>,
-    component_listeners: Slab<AnyMap>,
-
-    dynamics: Slab<Rc<Fn(&mut TreeContext) -> ElementRef>>,
-    dynamic_indices: Slab<usize>,
-
-    under_cursor: Vec<usize>,
+    under_cursor: HashSet<Id>,
     input_state: InputState,
+}
+
+struct ComponentData {
+    component: Box<ComponentWrapper>,
+    redirect: Option<Id>,
+    children: Vec<Id>,
+}
+
+impl ComponentData {
+    fn new(component: Box<ComponentWrapper>) -> ComponentData {
+        ComponentData {
+            component,
+            redirect: None,
+            children: Vec::new(),
+        }
+    }
+}
+
+struct Layout {
+    id: Id,
+    bounds: BoundingBox,
+    children: Vec<Layout>,
+}
+
+impl Layout {
+    fn new(id: Id) -> Layout {
+        Layout {
+            id: id,
+            bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
+            children: Vec::new(),
+        }
+    }
 }
 
 impl UI {
@@ -381,27 +118,15 @@ impl UI {
             width: width,
             height: height,
 
-            context: Context::new(),
-
-            root: 0,
-            elements: Slab::new(),
-            parents: Slab::new(),
-            children: Slab::new(),
-            layout: Slab::new(),
             components: Slab::new(),
+            layout: Layout::new((0, 0)),
 
-            element_listeners: Slab::new(),
-            component_listeners: Slab::new(),
-
-            dynamics: Slab::new(),
-            dynamic_indices: Slab::new(),
-
-            under_cursor: Vec::new(),
+            under_cursor: HashSet::new(),
             input_state: InputState::default(),
         };
 
-        let root = ui.element(Empty, &[]);
-        ui.root(root);
+        let root_region = ui.components.insert(Slab::new());
+        ui.components[root_region].insert(ComponentData::new(Box::new(Empty)));
 
         ui
     }
@@ -420,76 +145,8 @@ impl UI {
 
     /* tree */
 
-    pub fn root(&mut self, element: ElementRef) {
-        self.root = element.index;
-        self.layout();
-    }
-
-    pub fn element<E: Element + 'static>(&mut self, element: E, children: &[ElementRef]) -> ElementRef {
-        let index = self.elements.insert(Box::new(element));
-        self.parents.insert(None);
-        let mut children_vec = Vec::new();
-        for child in children {
-            children_vec.push(child.index);
-            self.parents[child.index] = Some(index);
-        }
-        self.children.insert(children_vec);
-        self.layout.insert(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
-        self.element_listeners.insert(AnyMap::new());
-        ElementRef { index: index, component: None }
-    }
-
-    pub fn tree<F: Fn(&mut TreeContext) -> ElementRef + 'static>(&mut self, f: F) -> ElementRef {
-        let element = self.element(Empty, &[]);
-        self.dynamics.insert(Rc::new(f));
-        self.dynamic_indices.insert(element.index);
-        element
-    }
-
-    pub fn listen<E: 'static, C: 'static>(&mut self, element: ElementRef, listener: ComponentRef<C>, callback: fn(&mut C, &mut ComponentContext<C>, E)) {
-        let callback = Box::new(move |component: &mut UnsafeAny, context: &mut Context, input_state: &mut InputState, event: E| {
-            let mut component_context = ComponentContext::new(listener, context, input_state);
-            callback(unsafe { component.downcast_mut_unchecked() }, &mut component_context, event);
-            component_context.response
-        });
-        if let Some(component) = element.component {
-            self.component_listeners[component].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>((listener.index, callback));
-        } else {
-            self.element_listeners[element.index].insert::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>((listener.index, callback));
-        }
-    }
-
-    pub fn component<C: 'static>(&mut self, component: C) -> ComponentRef<C> {
-        let index = self.components.insert(Box::new(component));
-        self.component_listeners.insert(AnyMap::new());
-        ComponentRef::new(index)
-    }
-
-    pub fn bind<C>(&mut self, component: ComponentRef<C>, element: ElementRef) -> ElementRef {
-        ElementRef { index: element.index, component: Some(component.index) }
-    }
-
-    pub fn prop<A: 'static>(&mut self, value: A) -> Prop<A> {
-        let index = self.context.properties.insert(Box::new(value));
-        self.context.dependencies.insert(Vec::new());
-        self.context.dependents.insert(Vec::new());
-        self.context.update.insert(None);
-        self.context.priorities.insert(0);
-        Prop::new(index)
-    }
-
-    pub fn map<A: 'static, B: 'static, F>(&mut self, a: impl Into<Ref<A>>, f: F) -> Ref<B> where F: Fn(&A) -> B + 'static {
-        let a = a.into();
-        let value = f(self.context.get(a));
-        let b = self.prop(value);
-        self.context.dependencies[b.index].push(a.index);
-        self.context.dependents[a.index].push(b.index);
-        self.context.priorities[b.index] = self.context.priorities[a.index] + 1;
-        self.context.update[b.index] = Some(Box::new(move |props| {
-            let value = f(Context::get_prop(props, a));
-            props[b.index] = Box::new(value);
-        }));
-        b.into()
+    pub fn root(&mut self) -> Slot {
+        Slot { region: &mut self.components[0], id: (0, 0) }
     }
 
     /* event handling */
@@ -499,377 +156,412 @@ impl UI {
     }
 
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
-        match event {
-            InputEvent::MouseMove(position) => {
-                self.input_state.mouse_position = position;
-            }
-            InputEvent::MousePress(button) => {
-                match button {
-                    MouseButton::Left => {
-                        self.input_state.mouse_left_pressed = true;
-                    }
-                    MouseButton::Middle => {
-                        self.input_state.mouse_middle_pressed = true;
-                    }
-                    MouseButton::Right => {
-                        self.input_state.mouse_right_pressed = true;
-                    }
-                }
-            }
-            InputEvent::MouseRelease(button) => {
-                match button {
-                    MouseButton::Left => {
-                        self.input_state.mouse_left_pressed = false;
-                    }
-                    MouseButton::Middle => {
-                        self.input_state.mouse_middle_pressed = false;
-                    }
-                    MouseButton::Right => {
-                        self.input_state.mouse_right_pressed = false;
-                    }
-                }
-            }
-            _ => {}
-        }
+        // match event {
+        //     InputEvent::MouseMove(position) => {
+        //         self.input_state.mouse_position = position;
+        //     }
+        //     InputEvent::MousePress(button) => {
+        //         match button {
+        //             MouseButton::Left => {
+        //                 self.input_state.mouse_left_pressed = true;
+        //             }
+        //             MouseButton::Middle => {
+        //                 self.input_state.mouse_middle_pressed = true;
+        //             }
+        //             MouseButton::Right => {
+        //                 self.input_state.mouse_right_pressed = true;
+        //             }
+        //         }
+        //     }
+        //     InputEvent::MouseRelease(button) => {
+        //         match button {
+        //             MouseButton::Left => {
+        //                 self.input_state.mouse_left_pressed = false;
+        //             }
+        //             MouseButton::Middle => {
+        //                 self.input_state.mouse_middle_pressed = false;
+        //             }
+        //             MouseButton::Right => {
+        //                 self.input_state.mouse_right_pressed = false;
+        //             }
+        //         }
+        //     }
+        //     _ => {}
+        // }
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let handler = match event {
-            InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
-                if self.input_state.mouse_focus.is_some() {
-                    self.input_state.mouse_focus
-                } else {
-                    let mut i = 0;
-                    let handler = if self.layout[self.root].contains_point(self.input_state.mouse_position) {
-                        let mut element = self.root;
-                        loop {
-                            if i < self.under_cursor.len() {
-                                if element != self.under_cursor[i] {
-                                    let mut old_under_cursor = self.under_cursor.split_off(i);
-                                    for child in old_under_cursor {
-                                        if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
-                                            ui_response.merge(response);
-                                        }
-                                    }
-                                }
-                            }
-                            if i >= self.under_cursor.len() {
-                                self.under_cursor.push(element);
-                                if let Some(response) = self.fire_event::<ElementEvent>(element, ElementEvent::MouseEnter) {
-                                    ui_response.merge(response);
-                                }
-                            }
-                            i += 1;
+        // let handler = match event {
+        //     InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
+        //         if self.input_state.mouse_focus.is_some() {
+        //             self.input_state.mouse_focus
+        //         } else {
+        //             let mut i = 0;
+        //             let handler = if self.layout[self.root].contains_point(self.input_state.mouse_position) {
+        //                 let mut element = self.root;
+        //                 loop {
+        //                     if i < self.under_cursor.len() {
+        //                         if element != self.under_cursor[i] {
+        //                             let mut old_under_cursor = self.under_cursor.split_off(i);
+        //                             for child in old_under_cursor {
+        //                                 if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
+        //                                     ui_response.merge(response);
+        //                                 }
+        //                             }
+        //                         }
+        //                     }
+        //                     if i >= self.under_cursor.len() {
+        //                         self.under_cursor.push(element);
+        //                         if let Some(response) = self.fire_event::<ElementEvent>(element, ElementEvent::MouseEnter) {
+        //                             ui_response.merge(response);
+        //                         }
+        //                     }
+        //                     i += 1;
 
-                            let mut found = false;
-                            for child in self.children[element].iter() {
-                                if self.layout[*child].contains_point(self.input_state.mouse_position) {
-                                    element = *child;
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                break;
-                            }
-                        }
+        //                     let mut found = false;
+        //                     for child in self.children[element].iter() {
+        //                         if self.layout[*child].contains_point(self.input_state.mouse_position) {
+        //                             element = *child;
+        //                             found = true;
+        //                             break;
+        //                         }
+        //                     }
+        //                     if !found {
+        //                         break;
+        //                     }
+        //                 }
 
-                        Some(element)
-                    } else {
-                        None
-                    };
+        //                 Some(element)
+        //             } else {
+        //                 None
+        //             };
 
-                    let mut old_under_cursor = self.under_cursor.split_off(i);
-                    for child in old_under_cursor {
-                        if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
-                            ui_response.merge(response);
-                        }
-                    }
+        //             let mut old_under_cursor = self.under_cursor.split_off(i);
+        //             for child in old_under_cursor {
+        //                 if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
+        //                     ui_response.merge(response);
+        //                 }
+        //             }
 
-                    handler
-                }
-            },
-            InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
-                self.input_state.focus.or(Some(self.root))
-            }
-        };
+        //             handler
+        //         }
+        //     },
+        //     InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
+        //         self.input_state.focus.or(Some(self.root))
+        //     }
+        // };
 
-        if let Some(handler) = handler {
-            if let Some(response) = self.bubble_event(handler, ElementEvent::from_input_event(event)) {
-                ui_response.merge(response);
-            }
-        }
+        // if let Some(handler) = handler {
+        //     if let Some(response) = self.bubble_event(handler, ElementEvent::from_input_event(event)) {
+        //         ui_response.merge(response);
+        //     }
+        // }
 
         ui_response
     }
 
-    fn bubble_event(&mut self, element: usize, event: ElementEvent) -> Option<UIEventResponse> {
-        let mut handler = Some(element);
-        let mut response = None;
-        while let Some(element) = handler {
-            response = self.fire_event::<ElementEvent>(element, event);
-            if response.is_some() {
-                break;
-            } else {
-                handler = self.parents[element];
-            }
-        }
-        response
-    }
+    // fn bubble_event(&mut self, element: usize, event: ElementEvent) -> Option<UIEventResponse> {
+    //     let mut handler = Some(element);
+    //     let mut response = None;
+    //     while let Some(element) = handler {
+    //         response = self.fire_event::<ElementEvent>(element, event);
+    //         if response.is_some() {
+    //             break;
+    //         } else {
+    //             handler = self.parents[element];
+    //         }
+    //     }
+    //     response
+    // }
 
-    fn fire_event<E: 'static>(&mut self, element: usize, event: E) -> Option<UIEventResponse> {
-        if let Some((listener, ref callback)) = self.element_listeners[element].get::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>() {
-            Some(callback(&mut *self.components[*listener], &mut self.context, &mut self.input_state, event))
-        } else {
-            None
-        }
-    }
+    // fn fire_event<E: 'static>(&mut self, element: usize, event: E) -> Option<UIEventResponse> {
+    //     if let Some((listener, ref callback)) = self.element_listeners[element].get::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>() {
+    //         Some(callback(&mut *self.components[*listener], &mut self.context, &mut self.input_state, event))
+    //     } else {
+    //         None
+    //     }
+    // }
 
-    pub fn update(&mut self) {
-        while let Some((index, _)) = self.context.queue.pop() {
-            if let Some(ref update) = self.context.update[index] {
-                update(&mut self.context.properties);
-            }
-            for dependent in self.context.dependents[index].iter() {
-                self.context.queue.push(*dependent, Reverse(self.context.priorities[*dependent]));
-            }
-        }
-        for i in 0..self.dynamics.len() {
-            let f = self.dynamics[i].clone();
-            self.children[self.dynamic_indices[i]] = vec![f(&mut TreeContext(self)).index];
-        }
+    // pub fn update(&mut self) {
+    //     while let Some((index, _)) = self.context.queue.pop() {
+    //         if let Some(ref update) = self.context.update[index] {
+    //             update(&mut self.context.properties);
+    //         }
+    //         for dependent in self.context.dependents[index].iter() {
+    //             self.context.queue.push(*dependent, Reverse(self.context.priorities[*dependent]));
+    //         }
+    //     }
+    //     for i in 0..self.dynamics.len() {
+    //         let f = self.dynamics[i].clone();
+    //         self.children[self.dynamic_indices[i]] = vec![f(&mut TreeContext(self)).index];
+    //     }
+    //     self.layout();
+    // }
+
+    /* paint */
+
+    pub fn paint(&mut self) -> DisplayList {
         self.layout();
-    }
-
-    /* display */
-
-    pub fn display(&self) -> DisplayList {
         let mut list = DisplayList::new();
-        self.display_element(self.root, &mut list);
+        self.paint_component(&self.layout, &mut list);
         list
     }
 
-    fn display_element(&self, element: usize, list: &mut DisplayList) {
-        self.elements[element].display(&ElementContext(&self.context), self.layout[element], list);
-        for child in self.children[element].iter() {
-            self.display_element(*child, list);
+    fn paint_component(&self, layout: &Layout, list: &mut DisplayList) {
+        self.components[layout.id.0][layout.id.1].component.paint(layout.bounds, list);
+        for child in layout.children.iter() {
+            self.paint_component(child, list);
         }
     }
 
     /* layout */
 
     fn layout(&mut self) {
-        let mut root = Self::child_delegate(&self.context, &self.children, &self.elements, self.root);
-        root.layout(self.width, self.height);
-        Self::commit_delegates(&mut self.layout, root, Point::new(0.0, 0.0));
+        self.layout = Layout::new(find_leaf(&self.components, (0, 0)));
+        Child { components: &self.components, layout: &mut self.layout }.layout(self.width, self.height);
+    }
+}
+
+fn find_leaf(components: &Slab<Slab<ComponentData>>, id: Id) -> Id {
+    let mut id = id;
+    while let Some(redirect) = components[id.0][id.1].redirect {
+        id = redirect;
+    }
+    id
+}
+
+/* install */
+
+pub struct InstallContext<'a, C: ?Sized> {
+    region: &'a mut Slab<ComponentData>,
+    id: Id,
+    phantom_data: PhantomData<C>,
+}
+
+impl<'a, C> InstallContext<'a, C> {
+    pub fn root(&'a mut self) -> Slot<'a> {
+        let id = if let Some(id) = self.region[self.id.1].redirect {
+            id
+        } else {
+            let id = (self.id.0, self.region.insert(ComponentData::new(Box::new(Empty))));
+            self.region[self.id.1].redirect = Some(id);
+            id
+        };
+        Slot { region: self.region, id }
+    }
+}
+
+pub struct Slot<'a> {
+    region: &'a mut Slab<ComponentData>,
+    id: Id,
+}
+
+impl<'a> Slot<'a> {
+    pub fn get<C: Component + 'static>(&mut self) -> Option<ComponentRef<C>> {
+        if self.region[self.id.1].component.is::<C>() {
+            Some(ComponentRef { region: self.region, id: self.id, phantom_data: PhantomData })
+        } else {
+            None
+        }
     }
 
-    fn child_delegate<'a>(context: &'a Context, children: &'a Slab<Vec<usize>>, elements: &'a Slab<Box<Element>>, reference: usize) -> ChildDelegate<'a> {
-        let mut child_delegates: Vec<ChildDelegate<'a>> = Vec::new();
-        let children_indices = &children[reference];
-        child_delegates.reserve(children_indices.len());
-        for child in children_indices {
-            child_delegates.push(Self::child_delegate(context, children, elements, *child));
-        }
-        ChildDelegate {
-            reference: reference,
-            element: &*elements[reference],
-            context: context,
-            bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
-            children: child_delegates,
-        }
+    pub fn place<C: Component + 'static>(&mut self, component: C) -> ComponentRef<C> {
+        self.region[self.id.1] = ComponentData::new(Box::new(component));
+        ComponentRef { region: self.region, id: self.id, phantom_data: PhantomData }
     }
 
-    fn commit_delegates(layout: &mut Slab<BoundingBox>, delegate: ChildDelegate, offset: Point) {
-        let offset = offset + delegate.bounds.pos;
-        layout[delegate.reference].pos = offset;
-        layout[delegate.reference].size = delegate.bounds.size;
-        for child in delegate.children {
-            Self::commit_delegates(layout, child, offset);
+    pub fn get_or_place<C: Component + 'static, F: Fn() -> C>(&mut self, f: F) -> ComponentRef<C> {
+        if self.region[self.id.1].component.is::<C>() {
+            ComponentRef { region: self.region, id: self.id, phantom_data: PhantomData }
+        } else {
+            self.place(f())
         }
     }
 }
 
-struct InputState {
-    mouse_position: Point,
-    mouse_left_pressed: bool,
-    mouse_middle_pressed: bool,
-    mouse_right_pressed: bool,
-    modifiers: KeyboardModifiers,
-    focus: Option<usize>,
-    mouse_focus: Option<usize>,
+pub struct ComponentRef<'a, C: Component> {
+    region: &'a mut Slab<ComponentData>,
+    id: Id,
+    phantom_data: PhantomData<C>,
 }
 
-impl Default for InputState {
-    fn default() -> InputState {
-        InputState {
-            mouse_position: Point { x: -1.0, y: -1.0 },
-            mouse_left_pressed: false,
-            mouse_middle_pressed: false,
-            mouse_right_pressed: false,
-            modifiers: KeyboardModifiers::default(),
-            focus: None,
-            mouse_focus: None,
-        }
+impl<'a, C: Component> ComponentRef<'a, C> {
+    fn get(&self) -> &C {
+        unsafe { self.region[self.id.1].component.downcast_ref_unchecked() }
+    }
+
+    fn get_mut(&mut self) -> &mut C {
+        unsafe { self.region[self.id.1].component.downcast_mut_unchecked() }
+    }
+}
+
+/* events */
+
+pub struct EventContext<C: Component> {
+    phantom_data: PhantomData<C>,
+}
+
+/* layout */
+
+pub struct Child<'a> {
+    components: &'a Slab<Slab<ComponentData>>,
+    layout: &'a mut Layout,
+}
+
+impl<'a> Child<'a> {
+    pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
+        self.layout.children = self.components[self.layout.id.0][self.layout.id.1].children.iter()
+            .map(|id| Layout::new(find_leaf(self.components, *id))).collect();
+        let components = &self.components;
+        let mut children: Vec<Child> = self.layout.children.iter_mut().map(|layout| Child { components, layout }).collect();
+        let (width, height) = self.components[self.layout.id.0][self.layout.id.1].component.layout(max_width, max_height, &mut children);
+        self.layout.bounds.size = Point::new(width, height);
+        (width, height)
+    }
+
+    pub fn offset(&mut self, x: f32, y: f32) {
+        self.layout.bounds.pos = Point::new(x, y);
     }
 }
 
 
 pub struct Empty;
 
-impl Empty {
-    pub fn new() -> Empty {
-        Empty
-    }
-
-    pub fn install(self, ui: &mut impl Install) -> ElementRef {
-        ui.element(self, &[])
-    }
-}
-
-impl Element for Empty {}
+impl Component for Empty {}
 
 
 pub struct BackgroundColor {
-    color: RefOrValue<[f32; 4]>,
+    color: [f32; 4],
 }
 
 impl BackgroundColor {
-    pub fn new(color: RefOrValue<[f32; 4]>) -> BackgroundColor {
-        BackgroundColor { color: color }
+    pub fn new(color: [f32; 4]) -> BackgroundColor {
+        BackgroundColor { color }
     }
 
-    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
-        ui.element(self, &[child])
+    pub fn color(&mut self, color: [f32; 4]) {
+        self.color = color;
     }
 }
 
-impl Element for BackgroundColor {
-    fn display(&self, ctx: &ElementContext, bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: *self.color.get(ctx) });
+impl Component for BackgroundColor {
+    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList) {
+        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
     }
 }
 
 
 pub struct Container {
-    max_size: RefOrValue<(f32, f32)>,
+    max_width: f32,
+    max_height: f32,
 }
 
 impl Container {
-    pub fn new(max_size: RefOrValue<(f32, f32)>) -> Container {
-        Container { max_size: max_size }
+    pub fn new(max_width: f32, max_height: f32) -> Container {
+        Container { max_width, max_height }
     }
 
-    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
-        ui.element(self, &[child])
+    pub fn max_width(&mut self, max_width: f32) {
+        self.max_width = max_width;
+    }
+
+    pub fn max_height(&mut self, max_height: f32) {
+        self.max_height = max_height;
     }
 }
 
-impl Element for Container {
-    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let (self_max_width, self_max_height) = *self.max_size.get(ctx);
-        let max_width = self_max_width.min(max_width);
-        let max_height = self_max_height.min(max_height);
-
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-
-        for child in children {
-            let (child_width, child_height) = child.layout(max_width, max_height);
-            width = width.max(child_width);
-            height = height.max(child_height);
+impl Component for Container {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+        if let Some(child) = children.get_mut(0) {
+            child.layout(self.max_width.min(max_width), self.max_height.min(max_height))
+        } else {
+            (0.0, 0.0)
         }
-        (width, height)
     }
 }
 
 
 pub struct Padding {
-    padding: RefOrValue<f32>,
+    padding: f32,
 }
 
 impl Padding {
-    pub fn new(padding: RefOrValue<f32>) -> Padding {
-        Padding { padding: padding }
+    pub fn new(padding: f32) -> Padding {
+        Padding { padding }
     }
 
-    pub fn install(self, ui: &mut impl Install, child: ElementRef) -> ElementRef {
-        ui.element(self, &[child])
+    pub fn padding(&mut self, padding: f32) {
+        self.padding = padding;
     }
 }
 
-impl Element for Padding {
-    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let padding = *self.padding.get(ctx);
-        let mut width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-        for child in children {
-            let (child_width, child_height) = child.layout(max_width - 2.0 * padding, max_height - 2.0 * padding);
-            width = width.max(child_width);
-            height = height.max(child_height);
-            child.offset(padding, padding);
+impl Component for Padding {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+        if let Some(child) = children.get_mut(0) {
+            let (child_width, child_height) = child.layout(max_width - 2.0 * self.padding, max_height - 2.0 * self.padding);
+            child.offset(self.padding, self.padding);
+            (child_width + 2.0 * self.padding, child_height + 2.0 * self.padding)
+        } else {
+            (2.0 * self.padding, 2.0 * self.padding)
         }
-        (width + 2.0 * padding, height + 2.0 * padding)
     }
 }
 
 
 pub struct Row {
-    spacing: RefOrValue<f32>,
+    spacing: f32,
 }
 
 impl Row {
-    pub fn new(spacing: RefOrValue<f32>) -> Row {
-        Row { spacing: spacing }
+    pub fn new(spacing: f32) -> Row {
+        Row { spacing }
     }
 
-    pub fn install(self, ui: &mut impl Install, children: &[ElementRef]) -> ElementRef {
-        ui.element(self, children)
+    pub fn spacing(&mut self, spacing: f32) {
+        self.spacing = spacing;
     }
 }
 
-impl Element for Row {
-    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let spacing = *self.spacing.get(ctx);
+impl Component for Row {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
             let (child_width, child_height) = child.layout(max_width - x, max_height);
             child.offset(x, 0.0);
-            x += child_width + spacing;
+            x += child_width + self.spacing;
             height = height.max(child_height);
         }
-        (x - spacing, height)
+        (x - self.spacing, height)
     }
 }
 
 
 pub struct Col {
-    spacing: RefOrValue<f32>,
+    spacing: f32,
 }
 
 impl Col {
-    pub fn new(spacing: RefOrValue<f32>) -> Col {
-        Col { spacing: spacing }
+    pub fn new(spacing: f32) -> Col {
+        Col { spacing }
     }
 
-    pub fn install(self, ui: &mut impl Install, children: &[ElementRef]) -> ElementRef {
-        ui.element(self, children)
+    pub fn spacing(&mut self, spacing: f32) {
+        self.spacing = spacing;
     }
 }
 
-impl Element for Col {
-    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, children: &mut [ChildDelegate]) -> (f32, f32) {
-        let spacing = *self.spacing.get(ctx);
+impl Component for Col {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
         for child in children {
             let (child_width, child_height) = child.layout(max_width, max_height - y);
             child.offset(0.0, y);
             width = width.max(child_width);
-            y += child_height + spacing;
+            y += child_height + self.spacing;
         }
-        (width, y - spacing)
+        (width, y - self.spacing)
     }
 }
 
@@ -880,32 +572,32 @@ pub struct TextStyle {
 }
 
 pub struct Text {
-    text: RefOrValue<String>,
-    style: Ref<TextStyle>,
+    text: String,
+    style: TextStyle,
     glyphs: RefCell<Vec<PositionedGlyph<'static>>>,
 }
 
 impl Text {
-    pub fn new(text: RefOrValue<String>, style: Ref<TextStyle>) -> Text {
-        Text { text: text, style: style, glyphs: RefCell::new(Vec::new()) }
+    pub fn new(text: String, style: TextStyle) -> Text {
+        Text { text, style, glyphs: RefCell::new(Vec::new()) }
     }
 
-    pub fn install(self, ui: &mut impl Install) -> ElementRef {
-        ui.element(self, &[])
+    pub fn text(&mut self, text: String) {
+        self.text = text;
     }
 
-    fn layout_text(&self, text: &str, max_width: f32, _max_height: f32, font: &Font<'static>, scale: Scale) -> (f32, f32) {
+    fn layout_text(&self, max_width: f32) -> (f32, f32) {
         use unicode_normalization::UnicodeNormalization;
 
         let mut glyphs = self.glyphs.borrow_mut();
         glyphs.clear();
         let mut wrapped = false;
 
-        let v_metrics = font.v_metrics(scale);
+        let v_metrics = self.style.font.v_metrics(self.style.scale);
         let advance_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
         let mut caret = point(0.0, v_metrics.ascent);
         let mut last_glyph_id = None;
-        for c in text.nfc() {
+        for c in self.text.nfc() {
             if c.is_control() {
                 match c {
                     '\r' => {
@@ -916,16 +608,16 @@ impl Text {
                 }
                 continue;
             }
-            let base_glyph = if let Some(glyph) = font.glyph(c) {
+            let base_glyph = if let Some(glyph) = self.style.font.glyph(c) {
                 glyph
             } else {
                 continue;
             };
             if let Some(id) = last_glyph_id.take() {
-                caret.x += font.pair_kerning(scale, id, base_glyph.id());
+                caret.x += self.style.font.pair_kerning(self.style.scale, id, base_glyph.id());
             }
             last_glyph_id = Some(base_glyph.id());
-            let mut glyph = base_glyph.scaled(scale).positioned(caret);
+            let mut glyph = base_glyph.scaled(self.style.scale).positioned(caret);
             if let Some(bb) = glyph.pixel_bounding_box() {
                 if bb.max.x > (max_width) as i32 {
                     wrapped = true;
@@ -943,15 +635,12 @@ impl Text {
     }
 }
 
-impl Element for Text {
-    fn layout(&self, ctx: &ElementContext, max_width: f32, max_height: f32, _children: &mut [ChildDelegate]) -> (f32, f32) {
-        let text = self.text.get(ctx);
-        let style = ctx.get(self.style);
-
-        self.layout_text(text, max_width, max_height, &style.font, style.scale)
+impl Component for Text {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+        self.layout_text(max_width)
     }
 
-    fn display(&self, _ctx: &ElementContext, bounds: BoundingBox, list: &mut DisplayList) {
+    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
             list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
@@ -960,67 +649,67 @@ impl Element for Text {
 }
 
 
-#[derive(Copy, Clone, Eq, PartialEq)]
-enum ButtonState {
-    Up,
-    Hover,
-    Down,
-}
+// #[derive(Copy, Clone, Eq, PartialEq)]
+// enum ButtonState {
+//     Up,
+//     Hover,
+//     Down,
+// }
 
-pub struct Button {
-    state: Prop<ButtonState>,
-}
+// pub struct Button {
+//     state: ButtonState,
+// }
 
-pub struct ClickEvent;
+// pub struct ClickEvent;
 
-impl Button {
-    pub fn with_text(ui: &mut impl Install, text: RefOrValue<String>, style: Ref<TextStyle>) -> ElementRef {
-        let text = Text::new(text, style).install(ui);
-        Button::install(ui, text)
-    }
+// impl Button {
+//     pub fn with_text(ui: &mut impl Install, text: RefOrValue<String>, style: Ref<TextStyle>) -> ElementRef {
+//         let text = Text::new(text, style).install(ui);
+//         Button::install(ui, text)
+//     }
 
-    pub fn install(ui: &mut impl Install, child: ElementRef) -> ElementRef {
-        let state = ui.prop(ButtonState::Up);
+//     pub fn install(ui: &mut impl Install, child: ElementRef) -> ElementRef {
+//         let state = ui.prop(ButtonState::Up);
 
-        let button = ui.component(Button { state: state });
+//         let button = ui.component(Button { state: state });
 
-        let color = ui.map(state, |state| {
-            match state {
-                ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
-                ButtonState::Hover => [0.3, 0.4, 0.5, 1.0],
-                ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
-            }
-        });
+//         let color = ui.map(state, |state| {
+//             match state {
+//                 ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
+//                 ButtonState::Hover => [0.3, 0.4, 0.5, 1.0],
+//                 ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
+//             }
+//         });
 
-        let padding = Padding::new(10.0f32.into()).install(ui, child);
-        let background = BackgroundColor::new(color.into()).install(ui, padding);
+//         let padding = Padding::new(10.0f32.into()).install(ui, child);
+//         let background = BackgroundColor::new(color.into()).install(ui, padding);
 
-        ui.listen(background, button, Self::handle);
+//         ui.listen(background, button, Self::handle);
 
-        ui.bind(button, background)
-    }
+//         ui.bind(button, background)
+//     }
 
-    fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
-        match event {
-            ElementEvent::MouseEnter => {
-                ctx.set(self.state, ButtonState::Hover);
-            }
-            ElementEvent::MouseLeave => {
-                ctx.set(self.state, ButtonState::Up);
-            }
-            ElementEvent::MousePress(MouseButton::Left) => {
-                ctx.set(self.state, ButtonState::Down);
-            }
-            ElementEvent::MouseRelease(MouseButton::Left) => {
-                if *ctx.get(self.state) == ButtonState::Down {
-                    ctx.set(self.state, ButtonState::Hover);
-                    ctx.fire::<ClickEvent>(ClickEvent);
-                }
-            }
-            _ => {}
-        }
-    }
-}
+//     fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
+//         match event {
+//             ElementEvent::MouseEnter => {
+//                 ctx.set(self.state, ButtonState::Hover);
+//             }
+//             ElementEvent::MouseLeave => {
+//                 ctx.set(self.state, ButtonState::Up);
+//             }
+//             ElementEvent::MousePress(MouseButton::Left) => {
+//                 ctx.set(self.state, ButtonState::Down);
+//             }
+//             ElementEvent::MouseRelease(MouseButton::Left) => {
+//                 if *ctx.get(self.state) == ButtonState::Down {
+//                     ctx.set(self.state, ButtonState::Hover);
+//                     ctx.fire::<ClickEvent>(ClickEvent);
+//                 }
+//             }
+//             _ => {}
+//         }
+//     }
+// }
 
 
 // pub struct Stack;
@@ -1217,6 +906,30 @@ impl Button {
 //     }
 // }
 
+
+struct InputState {
+    mouse_position: Point,
+    mouse_left_pressed: bool,
+    mouse_middle_pressed: bool,
+    mouse_right_pressed: bool,
+    modifiers: KeyboardModifiers,
+    focus: Option<usize>,
+    mouse_focus: Option<usize>,
+}
+
+impl Default for InputState {
+    fn default() -> InputState {
+        InputState {
+            mouse_position: Point { x: -1.0, y: -1.0 },
+            mouse_left_pressed: false,
+            mouse_middle_pressed: false,
+            mouse_right_pressed: false,
+            modifiers: KeyboardModifiers::default(),
+            focus: None,
+            mouse_focus: None,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum InputEvent {
