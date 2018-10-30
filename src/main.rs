@@ -81,10 +81,15 @@ fn main() {
     let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
     let font = collection.into_font().unwrap();
 
-    let style = TextStyle { font: font, scale: Scale::uniform(14.0) };
+    let style = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
+    let style2 = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
 
-    // ui.root().place(BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
-    ui.root().place(Text::new("lorem ipsum dolor sit amet".to_string(), style));
+    {
+        let mut bg = ui.root().place(BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
+        let mut col = bg.child().place(Col::new(0.0));
+        col.child().place(Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
+        col.child().place(Text::new("lorem ipsum dolor sit amet 2".to_string(), style2));
+    }
 
     // // let song = ui.prop(Song::default());
     // // let audio_send = start_audio_thread();

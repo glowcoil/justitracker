@@ -31,13 +31,13 @@ pub trait Component {
             (0.0, 0.0)
         }
     }
-    fn paint(&self, _bounds: BoundingBox, list: &mut DisplayList) {}
+    fn display(&self, _bounds: BoundingBox, list: &mut DisplayList) {}
 }
 
 trait ComponentWrapper {
     fn install(&self, region: &mut Slab<ComponentData>, id: Id);
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32);
-    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList);
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList);
     fn get_type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
 }
 
@@ -60,8 +60,8 @@ impl<C: Component> ComponentWrapper for C {
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
         self.layout(max_width, max_height, children)
     }
-    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList) {
-        self.paint(bounds, list);
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+        self.display(bounds, list);
     }
 }
 
@@ -96,6 +96,7 @@ impl ComponentData {
     }
 }
 
+#[derive(Debug)]
 struct Layout {
     id: Id,
     bounds: BoundingBox,
@@ -145,7 +146,7 @@ impl UI {
 
     /* tree */
 
-    pub fn root(&mut self) -> Slot {
+    pub fn root<'a>(&'a mut self) -> Slot<'a> {
         Slot { region: &mut self.components[0], id: (0, 0) }
     }
 
@@ -298,19 +299,19 @@ impl UI {
     //     self.layout();
     // }
 
-    /* paint */
+    /* display */
 
-    pub fn paint(&mut self) -> DisplayList {
+    pub fn display(&mut self) -> DisplayList {
         self.layout();
         let mut list = DisplayList::new();
-        self.paint_component(&self.layout, &mut list);
+        self.display_component(&self.layout, &mut list);
         list
     }
 
-    fn paint_component(&self, layout: &Layout, list: &mut DisplayList) {
-        self.components[layout.id.0][layout.id.1].component.paint(layout.bounds, list);
+    fn display_component(&self, layout: &Layout, list: &mut DisplayList) {
+        self.components[layout.id.0][layout.id.1].component.display(layout.bounds, list);
         for child in layout.children.iter() {
-            self.paint_component(child, list);
+            self.display_component(child, list);
         }
     }
 
@@ -319,6 +320,7 @@ impl UI {
     fn layout(&mut self) {
         self.layout = Layout::new(find_leaf(&self.components, (0, 0)));
         Child { components: &self.components, layout: &mut self.layout }.layout(self.width, self.height);
+        println!("{:#?}", &self.layout);
     }
 }
 
@@ -357,22 +359,22 @@ pub struct Slot<'a> {
 }
 
 impl<'a> Slot<'a> {
-    pub fn get<C: Component + 'static>(&mut self) -> Option<ComponentRef<C>> {
+    pub fn get<C: Component + 'static>(self) -> Option<ComponentRef<'a, C>> {
         if self.region[self.id.1].component.is::<C>() {
-            Some(ComponentRef { region: self.region, id: self.id, phantom_data: PhantomData })
+            Some(ComponentRef { region: self.region, id: self.id, index: 0, phantom_data: PhantomData })
         } else {
             None
         }
     }
 
-    pub fn place<C: Component + 'static>(&mut self, component: C) -> ComponentRef<C> {
+    pub fn place<C: Component + 'static>(self, component: C) -> ComponentRef<'a, C> {
         self.region[self.id.1] = ComponentData::new(Box::new(component));
-        ComponentRef { region: self.region, id: self.id, phantom_data: PhantomData }
+        ComponentRef { region: self.region, id: self.id, index: 0, phantom_data: PhantomData }
     }
 
-    pub fn get_or_place<C: Component + 'static, F: Fn() -> C>(&mut self, f: F) -> ComponentRef<C> {
+    pub fn get_or_place<C: Component + 'static, F: Fn() -> C>(self, f: F) -> ComponentRef<'a, C> {
         if self.region[self.id.1].component.is::<C>() {
-            ComponentRef { region: self.region, id: self.id, phantom_data: PhantomData }
+            ComponentRef { region: self.region, id: self.id, index: 0, phantom_data: PhantomData }
         } else {
             self.place(f())
         }
@@ -382,16 +384,29 @@ impl<'a> Slot<'a> {
 pub struct ComponentRef<'a, C: Component> {
     region: &'a mut Slab<ComponentData>,
     id: Id,
+    index: usize,
     phantom_data: PhantomData<C>,
 }
 
 impl<'a, C: Component> ComponentRef<'a, C> {
-    fn get(&self) -> &C {
+    pub fn get(&self) -> &C {
         unsafe { self.region[self.id.1].component.downcast_ref_unchecked() }
     }
 
-    fn get_mut(&mut self) -> &mut C {
+    pub fn get_mut(&mut self) -> &mut C {
         unsafe { self.region[self.id.1].component.downcast_mut_unchecked() }
+    }
+
+    pub fn child<'b>(&'b mut self) -> Slot<'b> {
+        let id = if self.index == self.region[self.id.1].children.len() {
+            let id = (self.id.0, self.region.insert(ComponentData::new(Box::new(Empty))));
+            self.region[self.id.1].children.push(id);
+            id
+        } else {
+            self.region[self.id.1].children[self.index]
+        };
+        self.index += 1;
+        Slot { region: self.region, id }
     }
 }
 
@@ -445,7 +460,7 @@ impl BackgroundColor {
 }
 
 impl Component for BackgroundColor {
-    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
         list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
     }
 }
@@ -631,7 +646,7 @@ impl Text {
         }
 
         let width = if wrapped { max_width } else { caret.x };
-        (width, v_metrics.ascent - v_metrics.descent)
+        (width, caret.y)
     }
 }
 
@@ -640,7 +655,7 @@ impl Component for Text {
         self.layout_text(max_width)
     }
 
-    fn paint(&self, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
             list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
