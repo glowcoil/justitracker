@@ -23,8 +23,8 @@ use render::*;
 /* component */
 
 pub trait Component {
-    fn install(&self, context: &mut InstallContext<Self>) {}
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn install(&self, context: &mut InstallContext, children: &[Child]) {}
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
             child.layout(max_width, max_height)
         } else {
@@ -35,8 +35,8 @@ pub trait Component {
 }
 
 trait ComponentWrapper {
-    fn install(&self, region: &mut Slab<ComponentData>, id: Id);
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32);
+    fn install(&self, context: &mut InstallContext, children: &[Child]);
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32);
     fn display(&self, bounds: BoundingBox, list: &mut DisplayList);
     fn get_type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
 }
@@ -54,10 +54,10 @@ impl ComponentWrapper {
 }
 
 impl<C: Component> ComponentWrapper for C {
-    fn install(&self, region: &mut Slab<ComponentData>, id: Id) {
-        self.install(&mut InstallContext { region, id, phantom_data: PhantomData });
+    fn install(&self, context: &mut InstallContext, children: &[Child]) {
+        self.install(context, children);
     }
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         self.layout(max_width, max_height, children)
     }
     fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
@@ -67,13 +67,13 @@ impl<C: Component> ComponentWrapper for C {
 
 /* ui */
 
-type Id = (usize, usize);
+type Id = usize;
 
 pub struct UI {
     width: f32,
     height: f32,
 
-    components: Slab<Slab<ComponentData>>,
+    components: Slab<ComponentData>,
     layout: Layout,
 
     under_cursor: HashSet<Id>,
@@ -82,15 +82,21 @@ pub struct UI {
 
 struct ComponentData {
     component: Box<ComponentWrapper>,
-    redirect: Option<Id>,
+    redirect: Redirect,
     children: Vec<Id>,
+}
+
+enum Redirect {
+     None,
+     Inner(Id),
+     Child(Id, usize),
 }
 
 impl ComponentData {
     fn new(component: Box<ComponentWrapper>) -> ComponentData {
         ComponentData {
             component,
-            redirect: None,
+            redirect: Redirect::None,
             children: Vec::new(),
         }
     }
@@ -120,14 +126,13 @@ impl UI {
             height: height,
 
             components: Slab::new(),
-            layout: Layout::new((0, 0)),
+            layout: Layout::new(0),
 
             under_cursor: HashSet::new(),
             input_state: InputState::default(),
         };
 
-        let root_region = ui.components.insert(Slab::new());
-        ui.components[root_region].insert(ComponentData::new(Box::new(Empty)));
+        ui.components.insert(ComponentData::new(Box::new(Empty)));
 
         ui
     }
@@ -147,7 +152,7 @@ impl UI {
     /* tree */
 
     pub fn root<'a>(&'a mut self) -> Slot<'a> {
-        Slot { region: &mut self.components[0], id: (0, 0) }
+        Slot { components: &mut self.components, id: 0 }
     }
 
     /* event handling */
@@ -302,6 +307,7 @@ impl UI {
     /* display */
 
     pub fn display(&mut self) -> DisplayList {
+        self.update();
         self.layout();
         let mut list = DisplayList::new();
         self.display_component(&self.layout, &mut list);
@@ -309,7 +315,7 @@ impl UI {
     }
 
     fn display_component(&self, layout: &Layout, list: &mut DisplayList) {
-        self.components[layout.id.0][layout.id.1].component.display(layout.bounds, list);
+        self.components[layout.id].component.display(layout.bounds, list);
         for child in layout.children.iter() {
             self.display_component(child, list);
         }
@@ -318,71 +324,104 @@ impl UI {
     /* layout */
 
     fn layout(&mut self) {
-        self.layout = Layout::new(find_leaf(&self.components, (0, 0)));
-        Child { components: &self.components, layout: &mut self.layout }.layout(self.width, self.height);
+        self.layout = Layout::new(find_leaf(&self.components, 0));
+        LayoutChild { components: &self.components, layout: &mut self.layout }.layout(self.width, self.height);
         println!("{:#?}", &self.layout);
+    }
+
+    /* update */
+
+    fn update(&mut self) {
+        self.update_component(0);
+    }
+
+    fn update_component(&mut self, id: Id) {
+        if let Redirect::Child(..) = self.components[id].redirect {
+            return;
+        }
+        let mut component = mem::replace(&mut self.components[id].component, Box::new(Empty));
+        let children: Vec<Child> = (0..self.components[id].children.len()).map(|i| Child { parent: id, child: i }).collect();
+        component.install(&mut InstallContext { components: &mut self.components, id }, &children);
+        self.components[id].component = component;
+        for child in self.components[id].children.clone() {
+            self.update_component(child);
+        }
+        if let Redirect::Inner(inner) = self.components[id].redirect {
+            self.update_component(inner);
+        }
     }
 }
 
-fn find_leaf(components: &Slab<Slab<ComponentData>>, id: Id) -> Id {
+fn find_leaf(components: &Slab<ComponentData>, id: Id) -> Id {
     let mut id = id;
-    while let Some(redirect) = components[id.0][id.1].redirect {
-        id = redirect;
+    loop {
+        match components[id].redirect {
+            Redirect::Inner(redirect) => { id = redirect; }
+            Redirect::Child(parent, child) => { id = components[parent].children[child]; }
+            Redirect::None => { break; }
+        }
     }
     id
 }
 
 /* install */
 
-pub struct InstallContext<'a, C: ?Sized> {
-    region: &'a mut Slab<ComponentData>,
+pub struct InstallContext<'a> {
+    components: &'a mut Slab<ComponentData>,
     id: Id,
-    phantom_data: PhantomData<C>,
 }
 
-impl<'a, C> InstallContext<'a, C> {
-    pub fn root(&'a mut self) -> Slot<'a> {
-        let id = if let Some(id) = self.region[self.id.1].redirect {
-            id
+impl<'a> InstallContext<'a> {
+    pub fn root<'b>(&'b mut self) -> Slot<'b> {
+        if let Redirect::Inner(inner) = self.components[self.id].redirect {
+            Slot { components: self.components, id: inner }
         } else {
-            let id = (self.id.0, self.region.insert(ComponentData::new(Box::new(Empty))));
-            self.region[self.id.1].redirect = Some(id);
-            id
-        };
-        Slot { region: self.region, id }
+            let inner = self.components.insert(ComponentData::new(Box::new(Empty)));
+            self.components[self.id].redirect = Redirect::Inner(inner);
+            Slot { components: self.components, id: inner }
+        }
     }
 }
 
+pub struct Child {
+    parent: Id,
+    child: usize,
+}
+
 pub struct Slot<'a> {
-    region: &'a mut Slab<ComponentData>,
+    components: &'a mut Slab<ComponentData>,
     id: Id,
 }
 
 impl<'a> Slot<'a> {
     pub fn get<C: Component + 'static>(self) -> Option<ComponentRef<'a, C>> {
-        if self.region[self.id.1].component.is::<C>() {
-            Some(ComponentRef { region: self.region, id: self.id, index: 0, phantom_data: PhantomData })
+        if self.components[self.id].component.is::<C>() {
+            Some(ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData })
         } else {
             None
         }
     }
 
     pub fn place<C: Component + 'static>(self, component: C) -> ComponentRef<'a, C> {
-        self.region[self.id.1] = ComponentData::new(Box::new(component));
-        ComponentRef { region: self.region, id: self.id, index: 0, phantom_data: PhantomData }
+        self.components[self.id] = ComponentData::new(Box::new(component));
+        ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData }
     }
 
     pub fn get_or_place<C: Component + 'static, F: Fn() -> C>(self, f: F) -> ComponentRef<'a, C> {
-        if self.region[self.id.1].component.is::<C>() {
-            ComponentRef { region: self.region, id: self.id, index: 0, phantom_data: PhantomData }
+        if self.components[self.id].component.is::<C>() {
+            ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData }
         } else {
             self.place(f())
         }
     }
+
+    pub fn place_child(self, child: Child) {
+        self.components[self.id].redirect = Redirect::Child(child.parent, child.child);
+    }
 }
 
 pub struct ComponentRef<'a, C: Component> {
-    region: &'a mut Slab<ComponentData>,
+    components: &'a mut Slab<ComponentData>,
     id: Id,
     index: usize,
     phantom_data: PhantomData<C>,
@@ -390,23 +429,23 @@ pub struct ComponentRef<'a, C: Component> {
 
 impl<'a, C: Component> ComponentRef<'a, C> {
     pub fn get(&self) -> &C {
-        unsafe { self.region[self.id.1].component.downcast_ref_unchecked() }
+        unsafe { self.components[self.id].component.downcast_ref_unchecked() }
     }
 
     pub fn get_mut(&mut self) -> &mut C {
-        unsafe { self.region[self.id.1].component.downcast_mut_unchecked() }
+        unsafe { self.components[self.id].component.downcast_mut_unchecked() }
     }
 
     pub fn child<'b>(&'b mut self) -> Slot<'b> {
-        let id = if self.index == self.region[self.id.1].children.len() {
-            let id = (self.id.0, self.region.insert(ComponentData::new(Box::new(Empty))));
-            self.region[self.id.1].children.push(id);
+        let id = if self.index == self.components[self.id].children.len() {
+            let id = self.components.insert(ComponentData::new(Box::new(Empty)));
+            self.components[self.id].children.push(id);
             id
         } else {
-            self.region[self.id.1].children[self.index]
+            self.components[self.id].children[self.index]
         };
         self.index += 1;
-        Slot { region: self.region, id }
+        Slot { components: self.components, id }
     }
 }
 
@@ -418,18 +457,18 @@ pub struct EventContext<C: Component> {
 
 /* layout */
 
-pub struct Child<'a> {
-    components: &'a Slab<Slab<ComponentData>>,
+pub struct LayoutChild<'a> {
+    components: &'a Slab<ComponentData>,
     layout: &'a mut Layout,
 }
 
-impl<'a> Child<'a> {
+impl<'a> LayoutChild<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        self.layout.children = self.components[self.layout.id.0][self.layout.id.1].children.iter()
+        self.layout.children = self.components[self.layout.id].children.iter()
             .map(|id| Layout::new(find_leaf(self.components, *id))).collect();
         let components = &self.components;
-        let mut children: Vec<Child> = self.layout.children.iter_mut().map(|layout| Child { components, layout }).collect();
-        let (width, height) = self.components[self.layout.id.0][self.layout.id.1].component.layout(max_width, max_height, &mut children);
+        let mut children: Vec<LayoutChild> = self.layout.children.iter_mut().map(|layout| LayoutChild { components, layout }).collect();
+        let (width, height) = self.components[self.layout.id].component.layout(max_width, max_height, &mut children);
         self.layout.bounds.size = Point::new(width, height);
         (width, height)
     }
@@ -440,7 +479,7 @@ impl<'a> Child<'a> {
 }
 
 
-pub struct Empty;
+struct Empty;
 
 impl Component for Empty {}
 
@@ -486,7 +525,7 @@ impl Container {
 }
 
 impl Component for Container {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
             child.layout(self.max_width.min(max_width), self.max_height.min(max_height))
         } else {
@@ -511,7 +550,7 @@ impl Padding {
 }
 
 impl Component for Padding {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
             let (child_width, child_height) = child.layout(max_width - 2.0 * self.padding, max_height - 2.0 * self.padding);
             child.offset(self.padding, self.padding);
@@ -538,7 +577,7 @@ impl Row {
 }
 
 impl Component for Row {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         let mut x: f32 = 0.0;
         let mut height: f32 = 0.0;
         for child in children {
@@ -567,7 +606,7 @@ impl Col {
 }
 
 impl Component for Col {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         let mut width: f32 = 0.0;
         let mut y: f32 = 0.0;
         for child in children {
@@ -651,7 +690,7 @@ impl Text {
 }
 
 impl Component for Text {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [Child]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         self.layout_text(max_width)
     }
 
@@ -664,67 +703,57 @@ impl Component for Text {
 }
 
 
-// #[derive(Copy, Clone, Eq, PartialEq)]
-// enum ButtonState {
-//     Up,
-//     Hover,
-//     Down,
-// }
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum ButtonState {
+    Up,
+    Hover,
+    Down,
+}
 
-// pub struct Button {
-//     state: ButtonState,
-// }
+pub struct Button {
+    state: ButtonState,
+}
 
-// pub struct ClickEvent;
+pub struct ClickEvent;
 
-// impl Button {
-//     pub fn with_text(ui: &mut impl Install, text: RefOrValue<String>, style: Ref<TextStyle>) -> ElementRef {
-//         let text = Text::new(text, style).install(ui);
-//         Button::install(ui, text)
-//     }
+impl Button {
+    pub fn new() -> Button {
+        Button { state: ButtonState::Up }
+    }
+}
 
-//     pub fn install(ui: &mut impl Install, child: ElementRef) -> ElementRef {
-//         let state = ui.prop(ButtonState::Up);
+impl Component for Button {
+    fn install(&self, context: &mut InstallContext, children: &[Child]) {
+        let color = match self.state {
+            ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
+            ButtonState::Hover => [0.3, 0.4, 0.5, 1.0],
+            ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
+        };
 
-//         let button = ui.component(Button { state: state });
+        context.root().place(BackgroundColor::new(color)).child().place(Padding::new(10.0));
+    }
 
-//         let color = ui.map(state, |state| {
-//             match state {
-//                 ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
-//                 ButtonState::Hover => [0.3, 0.4, 0.5, 1.0],
-//                 ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
-//             }
-//         });
-
-//         let padding = Padding::new(10.0f32.into()).install(ui, child);
-//         let background = BackgroundColor::new(color.into()).install(ui, padding);
-
-//         ui.listen(background, button, Self::handle);
-
-//         ui.bind(button, background)
-//     }
-
-//     fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
-//         match event {
-//             ElementEvent::MouseEnter => {
-//                 ctx.set(self.state, ButtonState::Hover);
-//             }
-//             ElementEvent::MouseLeave => {
-//                 ctx.set(self.state, ButtonState::Up);
-//             }
-//             ElementEvent::MousePress(MouseButton::Left) => {
-//                 ctx.set(self.state, ButtonState::Down);
-//             }
-//             ElementEvent::MouseRelease(MouseButton::Left) => {
-//                 if *ctx.get(self.state) == ButtonState::Down {
-//                     ctx.set(self.state, ButtonState::Hover);
-//                     ctx.fire::<ClickEvent>(ClickEvent);
-//                 }
-//             }
-//             _ => {}
-//         }
-//     }
-// }
+    // fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
+    //     match event {
+    //         ElementEvent::MouseEnter => {
+    //             ctx.set(self.state, ButtonState::Hover);
+    //         }
+    //         ElementEvent::MouseLeave => {
+    //             ctx.set(self.state, ButtonState::Up);
+    //         }
+    //         ElementEvent::MousePress(MouseButton::Left) => {
+    //             ctx.set(self.state, ButtonState::Down);
+    //         }
+    //         ElementEvent::MouseRelease(MouseButton::Left) => {
+    //             if *ctx.get(self.state) == ButtonState::Down {
+    //                 ctx.set(self.state, ButtonState::Hover);
+    //                 ctx.fire::<ClickEvent>(ClickEvent);
+    //             }
+    //         }
+    //         _ => {}
+    //     }
+    // }
+}
 
 
 // pub struct Stack;

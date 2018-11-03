@@ -89,6 +89,7 @@ fn main() {
         let mut col = bg.child().place(Col::new(0.0));
         col.child().place(Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
         col.child().place(Text::new("lorem ipsum dolor sit amet 2".to_string(), style2));
+        col.child().place(Button::new());
     }
 
     // // let song = ui.prop(Song::default());
@@ -266,7 +267,7 @@ fn main() {
     // ctx.set_element_style::<BoxStyle>(cursor_note, BoxStyle::color([0.02, 0.2, 0.6, 1.0]));
 
 
-    renderer.render(ui.paint());
+    renderer.render(ui.display());
 
     let mut cursor_hide = false;
     events_loop.run_forever(|ev| {
@@ -277,7 +278,7 @@ fn main() {
                 }
                 glutin::WindowEvent::Resized(w, h) => {
                     ui.resize(w as f32, h as f32);
-                    renderer.render(ui.paint());
+                    renderer.render(ui.display());
                     None
                 }
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
@@ -357,7 +358,7 @@ fn main() {
                 }
             }
 
-            renderer.render(ui.paint());
+            renderer.render(ui.display());
         }
 
         glutin::ControlFlow::Continue
