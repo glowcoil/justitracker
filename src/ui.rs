@@ -364,6 +364,17 @@ fn find_leaf(components: &Slab<ComponentData>, id: Id) -> Id {
     id
 }
 
+fn cleanup(components: &mut Slab<ComponentData>, id: Id) {
+    for child in mem::replace(&mut components[id].children, Vec::new()) {
+        cleanup(components, child);
+        components.remove(child);
+    }
+    if let Redirect::Inner(inner) = components[id].redirect {
+        cleanup(components, inner);
+        components.remove(inner);
+    }
+}
+
 /* install */
 
 pub struct InstallContext<'a> {
@@ -403,6 +414,7 @@ impl<'a> Slot<'a> {
     }
 
     pub fn place<C: Component + 'static>(self, component: C) -> ComponentRef<'a, C> {
+        cleanup(self.components, self.id);
         self.components[self.id] = ComponentData::new(Box::new(component));
         ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData }
     }
@@ -416,7 +428,10 @@ impl<'a> Slot<'a> {
     }
 
     pub fn place_child(self, child: Child) {
-        self.components[self.id].redirect = Redirect::Child(child.parent, child.child);
+        let mut component = ComponentData::new(Box::new(Empty));
+        component.redirect = Redirect::Child(child.parent, child.child);
+        cleanup(self.components, self.id);
+        self.components[self.id] = component;
     }
 }
 
