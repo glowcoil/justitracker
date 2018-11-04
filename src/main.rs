@@ -88,7 +88,10 @@ fn main() {
         let mut bg = ui.root().place(BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
         let mut col = bg.child().place(Col::new(0.0));
         col.child().place(Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
-        col.child().place(Text::new("lorem ipsum dolor sit amet 2".to_string(), style2));
+        col.child().place(Text::new("lorem ipsum dolor sit amet 2".to_string(), style2))
+            .listen(|ctx, e: MousePress| {
+                println!("click");
+            });
         col.child().place(Button::new());
     }
 

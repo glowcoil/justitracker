@@ -74,9 +74,12 @@ pub struct UI {
     height: f32,
 
     components: Slab<ComponentData>,
+    listeners: Slab<AnyMap>,
     layout: Layout,
 
     under_cursor: HashSet<Id>,
+    focus: Option<Id>,
+    mouse_focus: Option<Id>,
     input_state: InputState,
 }
 
@@ -126,13 +129,16 @@ impl UI {
             height: height,
 
             components: Slab::new(),
+            listeners: Slab::new(),
             layout: Layout::new(0),
 
             under_cursor: HashSet::new(),
+            focus: None,
+            mouse_focus: None,
             input_state: InputState::default(),
         };
 
-        ui.components.insert(ComponentData::new(Box::new(Empty)));
+        ui.component(Box::new(Empty));
 
         ui
     }
@@ -152,7 +158,27 @@ impl UI {
     /* tree */
 
     pub fn root<'a>(&'a mut self) -> Slot<'a> {
-        Slot { components: &mut self.components, id: 0 }
+        Slot { ui: self, id: 0 }
+    }
+
+    fn component(&mut self, component: Box<ComponentWrapper>) -> Id {
+        let id = self.components.insert(ComponentData::new(component));
+        self.listeners.insert(AnyMap::new());
+        id
+    }
+
+    fn cleanup(&mut self, id: Id) {
+        self.listeners[id] = AnyMap::new();
+        for child in mem::replace(&mut self.components[id].children, Vec::new()) {
+            self.cleanup(child);
+            self.components.remove(child);
+            self.listeners.remove(child);
+        }
+        if let Redirect::Inner(inner) = self.components[id].redirect {
+            self.cleanup(inner);
+            self.components.remove(inner);
+            self.listeners.remove(inner);
+        }
     }
 
     /* event handling */
@@ -162,100 +188,63 @@ impl UI {
     }
 
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
-        // match event {
-        //     InputEvent::MouseMove(position) => {
-        //         self.input_state.mouse_position = position;
-        //     }
-        //     InputEvent::MousePress(button) => {
-        //         match button {
-        //             MouseButton::Left => {
-        //                 self.input_state.mouse_left_pressed = true;
-        //             }
-        //             MouseButton::Middle => {
-        //                 self.input_state.mouse_middle_pressed = true;
-        //             }
-        //             MouseButton::Right => {
-        //                 self.input_state.mouse_right_pressed = true;
-        //             }
-        //         }
-        //     }
-        //     InputEvent::MouseRelease(button) => {
-        //         match button {
-        //             MouseButton::Left => {
-        //                 self.input_state.mouse_left_pressed = false;
-        //             }
-        //             MouseButton::Middle => {
-        //                 self.input_state.mouse_middle_pressed = false;
-        //             }
-        //             MouseButton::Right => {
-        //                 self.input_state.mouse_right_pressed = false;
-        //             }
-        //         }
-        //     }
-        //     _ => {}
-        // }
+        match event {
+            InputEvent::MouseMove(position) => {
+                self.input_state.mouse_position = position;
+            }
+            InputEvent::MousePress(button) => {
+                match button {
+                    MouseButton::Left => {
+                        self.input_state.mouse_left_pressed = true;
+                    }
+                    MouseButton::Middle => {
+                        self.input_state.mouse_middle_pressed = true;
+                    }
+                    MouseButton::Right => {
+                        self.input_state.mouse_right_pressed = true;
+                    }
+                }
+            }
+            InputEvent::MouseRelease(button) => {
+                match button {
+                    MouseButton::Left => {
+                        self.input_state.mouse_left_pressed = false;
+                    }
+                    MouseButton::Middle => {
+                        self.input_state.mouse_middle_pressed = false;
+                    }
+                    MouseButton::Right => {
+                        self.input_state.mouse_right_pressed = false;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let path = self.trace(self.input_state.mouse_position);
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        // let handler = match event {
-        //     InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
-        //         if self.input_state.mouse_focus.is_some() {
-        //             self.input_state.mouse_focus
-        //         } else {
-        //             let mut i = 0;
-        //             let handler = if self.layout[self.root].contains_point(self.input_state.mouse_position) {
-        //                 let mut element = self.root;
-        //                 loop {
-        //                     if i < self.under_cursor.len() {
-        //                         if element != self.under_cursor[i] {
-        //                             let mut old_under_cursor = self.under_cursor.split_off(i);
-        //                             for child in old_under_cursor {
-        //                                 if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
-        //                                     ui_response.merge(response);
-        //                                 }
-        //                             }
-        //                         }
-        //                     }
-        //                     if i >= self.under_cursor.len() {
-        //                         self.under_cursor.push(element);
-        //                         if let Some(response) = self.fire_event::<ElementEvent>(element, ElementEvent::MouseEnter) {
-        //                             ui_response.merge(response);
-        //                         }
-        //                     }
-        //                     i += 1;
-
-        //                     let mut found = false;
-        //                     for child in self.children[element].iter() {
-        //                         if self.layout[*child].contains_point(self.input_state.mouse_position) {
-        //                             element = *child;
-        //                             found = true;
-        //                             break;
-        //                         }
-        //                     }
-        //                     if !found {
-        //                         break;
-        //                     }
-        //                 }
-
-        //                 Some(element)
-        //             } else {
-        //                 None
-        //             };
-
-        //             let mut old_under_cursor = self.under_cursor.split_off(i);
-        //             for child in old_under_cursor {
-        //                 if let Some(response) = self.fire_event::<ElementEvent>(child, ElementEvent::MouseLeave) {
-        //                     ui_response.merge(response);
-        //                 }
-        //             }
-
-        //             handler
-        //         }
-        //     },
-        //     InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
-        //         self.input_state.focus.or(Some(self.root))
-        //     }
-        // };
+        let handler = match event {
+            InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
+                if let Some(mouse_focus) = self.mouse_focus {
+                    self.fire_input_event(mouse_focus, event);
+                } else {
+                    for component in path.iter().rev() {
+                        if self.fire_input_event(*component, event) {
+                            break;
+                        }
+                    }
+                }
+            },
+            InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
+                if let Some(focus) = self.focus {
+                    self.fire_input_event(focus, event);
+                } else {
+                    self.fire_input_event(0, event);
+                }
+            }
+        };
 
         // if let Some(handler) = handler {
         //     if let Some(response) = self.bubble_event(handler, ElementEvent::from_input_event(event)) {
@@ -263,46 +252,65 @@ impl UI {
         //     }
         // }
 
+        self.mouse_enter_leave(&path);
+
         ui_response
     }
 
-    // fn bubble_event(&mut self, element: usize, event: ElementEvent) -> Option<UIEventResponse> {
-    //     let mut handler = Some(element);
-    //     let mut response = None;
-    //     while let Some(element) = handler {
-    //         response = self.fire_event::<ElementEvent>(element, event);
-    //         if response.is_some() {
-    //             break;
-    //         } else {
-    //             handler = self.parents[element];
-    //         }
-    //     }
-    //     response
-    // }
+    fn trace(&self, mouse_position: Point) -> Vec<Id> {
+        let mut under_cursor = Vec::new();
+        self.trace_inner(mouse_position, &self.layout, &mut under_cursor);
+        under_cursor
+    }
 
-    // fn fire_event<E: 'static>(&mut self, element: usize, event: E) -> Option<UIEventResponse> {
-    //     if let Some((listener, ref callback)) = self.element_listeners[element].get::<(usize, Box<Fn(&mut UnsafeAny, &mut Context, &mut InputState, E) -> UIEventResponse>)>() {
-    //         Some(callback(&mut *self.components[*listener], &mut self.context, &mut self.input_state, event))
-    //     } else {
-    //         None
-    //     }
-    // }
+    fn trace_inner(&self, mouse_position: Point, layout: &Layout, under_cursor: &mut Vec<Id>) -> bool {
+        if layout.bounds.contains_point(mouse_position) {
+            under_cursor.push(layout.id);
+            for child in layout.children.iter() {
+                if self.trace_inner(mouse_position, child, under_cursor) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 
-    // pub fn update(&mut self) {
-    //     while let Some((index, _)) = self.context.queue.pop() {
-    //         if let Some(ref update) = self.context.update[index] {
-    //             update(&mut self.context.properties);
-    //         }
-    //         for dependent in self.context.dependents[index].iter() {
-    //             self.context.queue.push(*dependent, Reverse(self.context.priorities[*dependent]));
-    //         }
-    //     }
-    //     for i in 0..self.dynamics.len() {
-    //         let f = self.dynamics[i].clone();
-    //         self.children[self.dynamic_indices[i]] = vec![f(&mut TreeContext(self)).index];
-    //     }
-    //     self.layout();
-    // }
+    fn mouse_enter_leave(&mut self, path: &[Id]) {
+        let old_under_cursor = mem::replace(&mut self.under_cursor, HashSet::new());
+
+        let mut new_under_cursor = HashSet::new();
+        new_under_cursor.extend(path.iter());
+
+        for new in new_under_cursor.difference(&old_under_cursor) {
+            self.fire_event(*new, MouseEnter);
+        }
+        for old in old_under_cursor.difference(&new_under_cursor) {
+            self.fire_event(*old, MouseLeave);
+        }
+
+        self.under_cursor = new_under_cursor;
+    }
+
+    fn fire_event<E: 'static>(&mut self, id: Id, event: E) -> bool {
+        if let Some(callback) = self.listeners[id].get::<Box<Fn(&mut EventContext, E)>>() {
+            callback(&mut EventContext { components: &mut self.components }, event);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn fire_input_event(&mut self, id: Id, event: InputEvent) -> bool {
+        match event {
+            InputEvent::MouseMove(position) => self.fire_event(id, MouseMove(position)),
+            InputEvent::MousePress(button) => self.fire_event(id, MousePress(button)),
+            InputEvent::MouseRelease(button) => self.fire_event(id, MouseRelease(button)),
+            InputEvent::MouseScroll(delta) => self.fire_event(id, MouseScroll(delta)),
+            InputEvent::KeyPress(button) => self.fire_event(id, KeyPress(button)),
+            InputEvent::KeyRelease(button) => self.fire_event(id, KeyRelease(button)),
+            InputEvent::TextInput(c) => self.fire_event(id, TextInput(c)),
+        }
+    }
 
     /* display */
 
@@ -326,7 +334,7 @@ impl UI {
     fn layout(&mut self) {
         self.layout = Layout::new(find_leaf(&self.components, 0));
         LayoutChild { components: &self.components, layout: &mut self.layout }.layout(self.width, self.height);
-        println!("{:#?}", &self.layout);
+        // println!("{:#?}", &self.layout);
     }
 
     /* update */
@@ -341,7 +349,7 @@ impl UI {
         }
         let mut component = mem::replace(&mut self.components[id].component, Box::new(Empty));
         let children: Vec<Child> = (0..self.components[id].children.len()).map(|i| Child { parent: id, child: i }).collect();
-        component.install(&mut InstallContext { components: &mut self.components, id }, &children);
+        component.install(&mut InstallContext { ui: self, id }, &children);
         self.components[id].component = component;
         for child in self.components[id].children.clone() {
             self.update_component(child);
@@ -364,32 +372,21 @@ fn find_leaf(components: &Slab<ComponentData>, id: Id) -> Id {
     id
 }
 
-fn cleanup(components: &mut Slab<ComponentData>, id: Id) {
-    for child in mem::replace(&mut components[id].children, Vec::new()) {
-        cleanup(components, child);
-        components.remove(child);
-    }
-    if let Redirect::Inner(inner) = components[id].redirect {
-        cleanup(components, inner);
-        components.remove(inner);
-    }
-}
-
 /* install */
 
 pub struct InstallContext<'a> {
-    components: &'a mut Slab<ComponentData>,
+    ui: &'a mut UI,
     id: Id,
 }
 
 impl<'a> InstallContext<'a> {
     pub fn root<'b>(&'b mut self) -> Slot<'b> {
-        if let Redirect::Inner(inner) = self.components[self.id].redirect {
-            Slot { components: self.components, id: inner }
+        if let Redirect::Inner(inner) = self.ui.components[self.id].redirect {
+            Slot { ui: self.ui, id: inner }
         } else {
-            let inner = self.components.insert(ComponentData::new(Box::new(Empty)));
-            self.components[self.id].redirect = Redirect::Inner(inner);
-            Slot { components: self.components, id: inner }
+            let inner = self.ui.component(Box::new(Empty));
+            self.ui.components[self.id].redirect = Redirect::Inner(inner);
+            Slot { ui: self.ui, id: inner }
         }
     }
 }
@@ -400,28 +397,28 @@ pub struct Child {
 }
 
 pub struct Slot<'a> {
-    components: &'a mut Slab<ComponentData>,
+    ui: &'a mut UI,
     id: Id,
 }
 
 impl<'a> Slot<'a> {
     pub fn get<C: Component + 'static>(self) -> Option<ComponentRef<'a, C>> {
-        if self.components[self.id].component.is::<C>() {
-            Some(ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData })
+        if self.ui.components[self.id].component.is::<C>() {
+            Some(ComponentRef { ui: self.ui, id: self.id, child_index: 0, phantom_data: PhantomData })
         } else {
             None
         }
     }
 
     pub fn place<C: Component + 'static>(self, component: C) -> ComponentRef<'a, C> {
-        cleanup(self.components, self.id);
-        self.components[self.id] = ComponentData::new(Box::new(component));
-        ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData }
+        self.ui.cleanup(self.id);
+        self.ui.components[self.id] = ComponentData::new(Box::new(component));
+        ComponentRef { ui: self.ui, id: self.id, child_index: 0, phantom_data: PhantomData }
     }
 
     pub fn get_or_place<C: Component + 'static, F: Fn() -> C>(self, f: F) -> ComponentRef<'a, C> {
-        if self.components[self.id].component.is::<C>() {
-            ComponentRef { components: self.components, id: self.id, index: 0, phantom_data: PhantomData }
+        if self.ui.components[self.id].component.is::<C>() {
+            ComponentRef { ui: self.ui, id: self.id, child_index: 0, phantom_data: PhantomData }
         } else {
             self.place(f())
         }
@@ -430,44 +427,48 @@ impl<'a> Slot<'a> {
     pub fn place_child(self, child: Child) {
         let mut component = ComponentData::new(Box::new(Empty));
         component.redirect = Redirect::Child(child.parent, child.child);
-        cleanup(self.components, self.id);
-        self.components[self.id] = component;
+        self.ui.cleanup(self.id);
+        self.ui.components[self.id] = component;
     }
 }
 
 pub struct ComponentRef<'a, C: Component> {
-    components: &'a mut Slab<ComponentData>,
+    ui: &'a mut UI,
     id: Id,
-    index: usize,
+    child_index: usize,
     phantom_data: PhantomData<C>,
 }
 
 impl<'a, C: Component> ComponentRef<'a, C> {
     pub fn get(&self) -> &C {
-        unsafe { self.components[self.id].component.downcast_ref_unchecked() }
+        unsafe { self.ui.components[self.id].component.downcast_ref_unchecked() }
     }
 
     pub fn get_mut(&mut self) -> &mut C {
-        unsafe { self.components[self.id].component.downcast_mut_unchecked() }
+        unsafe { self.ui.components[self.id].component.downcast_mut_unchecked() }
     }
 
     pub fn child<'b>(&'b mut self) -> Slot<'b> {
-        let id = if self.index == self.components[self.id].children.len() {
-            let id = self.components.insert(ComponentData::new(Box::new(Empty)));
-            self.components[self.id].children.push(id);
+        let id = if self.child_index == self.ui.components[self.id].children.len() {
+            let id = self.ui.component(Box::new(Empty));
+            self.ui.components[self.id].children.push(id);
             id
         } else {
-            self.components[self.id].children[self.index]
+            self.ui.components[self.id].children[self.child_index]
         };
-        self.index += 1;
-        Slot { components: self.components, id }
+        self.child_index += 1;
+        Slot { ui: self.ui, id }
+    }
+
+    pub fn listen<E: 'static>(&mut self, handler: impl Fn(&mut EventContext, E) + 'static) {
+        self.ui.listeners[self.id].insert::<Box<Fn(&mut EventContext, E)>>(Box::new(handler));
     }
 }
 
 /* events */
 
-pub struct EventContext<C: Component> {
-    phantom_data: PhantomData<C>,
+pub struct EventContext<'a> {
+    components: &'a mut Slab<ComponentData>,
 }
 
 /* layout */
@@ -972,8 +973,6 @@ struct InputState {
     mouse_middle_pressed: bool,
     mouse_right_pressed: bool,
     modifiers: KeyboardModifiers,
-    focus: Option<usize>,
-    mouse_focus: Option<usize>,
 }
 
 impl Default for InputState {
@@ -984,8 +983,6 @@ impl Default for InputState {
             mouse_middle_pressed: false,
             mouse_right_pressed: false,
             modifiers: KeyboardModifiers::default(),
-            focus: None,
-            mouse_focus: None,
         }
     }
 }
@@ -1002,31 +999,31 @@ pub enum InputEvent {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum ElementEvent {
-    MouseEnter,
-    MouseLeave,
-    MouseMove(Point),
-    MousePress(MouseButton),
-    MouseRelease(MouseButton),
-    MouseScroll(f32),
-    KeyPress(KeyboardButton),
-    KeyRelease(KeyboardButton),
-    TextInput(char),
-}
+pub struct MouseEnter;
 
-impl ElementEvent {
-    fn from_input_event(event: InputEvent) -> ElementEvent {
-        match event {
-            InputEvent::MouseMove(point) => ElementEvent::MouseMove(point),
-            InputEvent::MousePress(button) => ElementEvent::MousePress(button),
-            InputEvent::MouseRelease(button) => ElementEvent::MouseRelease(button),
-            InputEvent::MouseScroll(delta) => ElementEvent::MouseScroll(delta),
-            InputEvent::KeyPress(button) => ElementEvent::KeyPress(button),
-            InputEvent::KeyRelease(button) => ElementEvent::KeyRelease(button),
-            InputEvent::TextInput(character) => ElementEvent::TextInput(character),
-        }
-    }
-}
+#[derive(Copy, Clone, Debug)]
+pub struct MouseLeave;
+
+#[derive(Copy, Clone, Debug)]
+pub struct MouseMove(Point);
+
+#[derive(Copy, Clone, Debug)]
+pub struct MousePress(MouseButton);
+
+#[derive(Copy, Clone, Debug)]
+pub struct MouseRelease(MouseButton);
+
+#[derive(Copy, Clone, Debug)]
+pub struct MouseScroll(f32);
+
+#[derive(Copy, Clone, Debug)]
+pub struct KeyPress(KeyboardButton);
+
+#[derive(Copy, Clone, Debug)]
+pub struct KeyRelease(KeyboardButton);
+
+#[derive(Copy, Clone, Debug)]
+pub struct TextInput(char);
 
 #[derive(Copy, Clone)]
 pub struct UIEventResponse {
