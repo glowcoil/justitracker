@@ -4,6 +4,7 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 use std::f32;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::mem;
@@ -23,7 +24,7 @@ use render::*;
 /* component */
 
 pub trait Component {
-    fn install(&self, context: &mut InstallContext, children: &[Child]) {}
+    fn install(&self, context: &mut InstallContext<Self>, children: &[Child]) {}
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
             child.layout(max_width, max_height)
@@ -35,7 +36,7 @@ pub trait Component {
 }
 
 trait ComponentWrapper {
-    fn install(&self, context: &mut InstallContext, children: &[Child]);
+    fn install(&self, ui: &mut UI, id: Id, children: &[Child]);
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32);
     fn display(&self, bounds: BoundingBox, list: &mut DisplayList);
     fn get_type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
@@ -54,8 +55,8 @@ impl ComponentWrapper {
 }
 
 impl<C: Component> ComponentWrapper for C {
-    fn install(&self, context: &mut InstallContext, children: &[Child]) {
-        self.install(context, children);
+    fn install(&self, ui: &mut UI, id: Id, children: &[Child]) {
+        self.install(&mut InstallContext { ui, id, phantom_data: PhantomData }, children);
     }
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         self.layout(max_width, max_height, children)
@@ -81,6 +82,8 @@ pub struct UI {
     focus: Option<Id>,
     mouse_focus: Option<Id>,
     input_state: InputState,
+
+    queue: VecDeque<QueueEntry>,
 }
 
 struct ComponentData {
@@ -122,6 +125,18 @@ impl Layout {
     }
 }
 
+struct Listener<E> {
+    id: Id,
+    callback: Box<UnsafeAny>,
+    dispatcher: fn(Id, &mut Box<UnsafeAny>, &mut Slab<ComponentData>, &mut VecDeque<QueueEntry>, E),
+}
+
+struct QueueEntry {
+    callback: fn(&mut UI, Id, Box<UnsafeAny>),
+    id: Id,
+    event: Box<UnsafeAny>,
+}
+
 impl UI {
     pub fn new(width: f32, height: f32) -> UI {
         let mut ui = UI {
@@ -136,6 +151,8 @@ impl UI {
             focus: None,
             mouse_focus: None,
             input_state: InputState::default(),
+
+            queue: VecDeque::new(),
         };
 
         ui.component(Box::new(Empty));
@@ -157,8 +174,9 @@ impl UI {
 
     /* tree */
 
-    pub fn root<'a>(&'a mut self) -> Slot<'a> {
-        Slot { ui: self, id: 0 }
+    pub fn place<C: Component + 'static>(&mut self, component: C) {
+        let root: Slot<Empty> = Slot { ui: self, owner: 0, id: 0, phantom_data: PhantomData };
+        root.place(component);
     }
 
     fn component(&mut self, component: Box<ComponentWrapper>) -> Id {
@@ -246,12 +264,6 @@ impl UI {
             }
         };
 
-        // if let Some(handler) = handler {
-        //     if let Some(response) = self.bubble_event(handler, ElementEvent::from_input_event(event)) {
-        //         ui_response.merge(response);
-        //     }
-        // }
-
         self.mouse_enter_leave(&path);
 
         ui_response
@@ -292,8 +304,8 @@ impl UI {
     }
 
     fn fire_event<E: 'static>(&mut self, id: Id, event: E) -> bool {
-        if let Some(callback) = self.listeners[id].get::<Box<Fn(&mut EventContext, E)>>() {
-            callback(&mut EventContext { components: &mut self.components }, event);
+        if let Some(listener) = self.listeners[id].get_mut::<Listener<E>>() {
+            (listener.dispatcher)(listener.id, &mut listener.callback, &mut self.components, &mut self.queue, event);
             true
         } else {
             false
@@ -309,6 +321,12 @@ impl UI {
             InputEvent::KeyPress(button) => self.fire_event(id, KeyPress(button)),
             InputEvent::KeyRelease(button) => self.fire_event(id, KeyRelease(button)),
             InputEvent::TextInput(c) => self.fire_event(id, TextInput(c)),
+        }
+    }
+
+    fn drain_queue(&mut self) {
+        while let Some(entry) = self.queue.pop_front() {
+            (entry.callback)(self, entry.id, entry.event);
         }
     }
 
@@ -340,6 +358,7 @@ impl UI {
     /* update */
 
     fn update(&mut self) {
+        self.drain_queue();
         self.update_component(0);
     }
 
@@ -349,7 +368,7 @@ impl UI {
         }
         let mut component = mem::replace(&mut self.components[id].component, Box::new(Empty));
         let children: Vec<Child> = (0..self.components[id].children.len()).map(|i| Child { parent: id, child: i }).collect();
-        component.install(&mut InstallContext { ui: self, id }, &children);
+        component.install(self, id, &children);
         self.components[id].component = component;
         for child in self.components[id].children.clone() {
             self.update_component(child);
@@ -374,19 +393,20 @@ fn find_leaf(components: &Slab<ComponentData>, id: Id) -> Id {
 
 /* install */
 
-pub struct InstallContext<'a> {
+pub struct InstallContext<'a, C: Component + ?Sized> {
     ui: &'a mut UI,
     id: Id,
+    phantom_data: PhantomData<C>,
 }
 
-impl<'a> InstallContext<'a> {
-    pub fn root<'b>(&'b mut self) -> Slot<'b> {
+impl<'a, C: Component> InstallContext<'a, C> {
+    pub fn root<'b>(&'b mut self) -> Slot<'b, C> {
         if let Redirect::Inner(inner) = self.ui.components[self.id].redirect {
-            Slot { ui: self.ui, id: inner }
+            Slot { ui: self.ui, owner: self.id, id: inner, phantom_data: PhantomData }
         } else {
             let inner = self.ui.component(Box::new(Empty));
             self.ui.components[self.id].redirect = Redirect::Inner(inner);
-            Slot { ui: self.ui, id: inner }
+            Slot { ui: self.ui, owner: self.id, id: inner, phantom_data: PhantomData }
         }
     }
 }
@@ -396,29 +416,31 @@ pub struct Child {
     child: usize,
 }
 
-pub struct Slot<'a> {
+pub struct Slot<'a, C> {
     ui: &'a mut UI,
+    owner: Id,
     id: Id,
+    phantom_data: PhantomData<C>,
 }
 
-impl<'a> Slot<'a> {
-    pub fn get<C: Component + 'static>(self) -> Option<ComponentRef<'a, C>> {
-        if self.ui.components[self.id].component.is::<C>() {
-            Some(ComponentRef { ui: self.ui, id: self.id, child_index: 0, phantom_data: PhantomData })
+impl<'a, C: Component> Slot<'a, C> {
+    pub fn get<D: Component + 'static>(self) -> Option<ComponentRef<'a, C, D>> {
+        if self.ui.components[self.id].component.is::<D>() {
+            Some(ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData })
         } else {
             None
         }
     }
 
-    pub fn place<C: Component + 'static>(self, component: C) -> ComponentRef<'a, C> {
+    pub fn place<D: Component + 'static>(self, component: D) -> ComponentRef<'a, C, D> {
         self.ui.cleanup(self.id);
         self.ui.components[self.id] = ComponentData::new(Box::new(component));
-        ComponentRef { ui: self.ui, id: self.id, child_index: 0, phantom_data: PhantomData }
+        ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData }
     }
 
-    pub fn get_or_place<C: Component + 'static, F: Fn() -> C>(self, f: F) -> ComponentRef<'a, C> {
-        if self.ui.components[self.id].component.is::<C>() {
-            ComponentRef { ui: self.ui, id: self.id, child_index: 0, phantom_data: PhantomData }
+    pub fn get_or_place<D: Component + 'static, F: FnOnce() -> D>(self, f: F) -> ComponentRef<'a, C, D> {
+        if self.ui.components[self.id].component.is::<D>() {
+            ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData }
         } else {
             self.place(f())
         }
@@ -432,23 +454,24 @@ impl<'a> Slot<'a> {
     }
 }
 
-pub struct ComponentRef<'a, C: Component> {
+pub struct ComponentRef<'a, C: Component, D: Component> {
     ui: &'a mut UI,
+    owner: Id,
     id: Id,
     child_index: usize,
-    phantom_data: PhantomData<C>,
+    phantom_data: PhantomData<(C, D)>,
 }
 
-impl<'a, C: Component> ComponentRef<'a, C> {
-    pub fn get(&self) -> &C {
+impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
+    pub fn get(&self) -> &D {
         unsafe { self.ui.components[self.id].component.downcast_ref_unchecked() }
     }
 
-    pub fn get_mut(&mut self) -> &mut C {
+    pub fn get_mut(&mut self) -> &mut D {
         unsafe { self.ui.components[self.id].component.downcast_mut_unchecked() }
     }
 
-    pub fn child<'b>(&'b mut self) -> Slot<'b> {
+    pub fn child<'b>(&'b mut self) -> Slot<'b, C> {
         let id = if self.child_index == self.ui.components[self.id].children.len() {
             let id = self.ui.component(Box::new(Empty));
             self.ui.components[self.id].children.push(id);
@@ -457,18 +480,49 @@ impl<'a, C: Component> ComponentRef<'a, C> {
             self.ui.components[self.id].children[self.child_index]
         };
         self.child_index += 1;
-        Slot { ui: self.ui, id }
+        Slot { ui: self.ui, owner: self.owner, id, phantom_data: PhantomData }
     }
 
-    pub fn listen<E: 'static>(&mut self, handler: impl Fn(&mut EventContext, E) + 'static) {
-        self.ui.listeners[self.id].insert::<Box<Fn(&mut EventContext, E)>>(Box::new(handler));
+    pub fn listen<E: 'static, F: Fn(&mut EventContext<C>, E) + 'static>(&mut self, callback: F) {
+        self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
+            id: self.owner,
+            callback: Box::new(callback),
+            dispatcher: |id, callback, components, queue, event| {
+                let f: &mut F = unsafe { callback.downcast_mut_unchecked() };
+                f(&mut EventContext { id, components, queue, phantom_data: PhantomData }, event);
+            },
+        });
     }
 }
 
 /* events */
 
-pub struct EventContext<'a> {
+pub struct EventContext<'a, C: Component> {
+    id: Id,
     components: &'a mut Slab<ComponentData>,
+    queue: &'a mut VecDeque<QueueEntry>,
+    phantom_data: PhantomData<C>,
+}
+
+impl<'a, C: Component> EventContext<'a, C> {
+    pub fn get(&self) -> &C {
+        unsafe { self.components[self.id].component.downcast_ref_unchecked() }
+    }
+
+    pub fn get_mut(&mut self) -> &mut C {
+        unsafe { self.components[self.id].component.downcast_mut_unchecked() }
+    }
+
+    pub fn fire<E: 'static>(&mut self, event: E) {
+        let id = self.id;
+        self.queue.push_back(QueueEntry {
+            id: self.id,
+            callback: |ui, id, event| {
+                ui.fire_event::<E>(id, *unsafe { event.downcast_unchecked() });
+            },
+            event: Box::new(event),
+        });
+    }
 }
 
 /* layout */
@@ -719,7 +773,7 @@ impl Component for Text {
 }
 
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum ButtonState {
     Up,
     Hover,
@@ -739,14 +793,19 @@ impl Button {
 }
 
 impl Component for Button {
-    fn install(&self, context: &mut InstallContext, children: &[Child]) {
+    fn install(&self, context: &mut InstallContext<Button>, children: &[Child]) {
         let color = match self.state {
             ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
             ButtonState::Hover => [0.3, 0.4, 0.5, 1.0],
             ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
         };
 
-        context.root().place(BackgroundColor::new(color)).child().place(Padding::new(10.0));
+        let mut bg = context.root().place(BackgroundColor::new(color));
+        bg.listen(|ctx, e: MousePress| {
+            ctx.fire(ClickEvent);
+            ctx.get_mut().state = ButtonState::Down;
+        });
+        bg.child().place(Padding::new(10.0));
     }
 
     // fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {

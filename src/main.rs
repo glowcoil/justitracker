@@ -78,22 +78,30 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
 
-    let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
-    let font = collection.into_font().unwrap();
+    struct App;
+    impl Component for App {
+        fn install(&self, context: &mut InstallContext<App>, children: &[Child]) {
+            let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
+            let font = collection.into_font().unwrap();
 
-    let style = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
-    let style2 = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
+            let style = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
+            let style2 = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
 
-    {
-        let mut bg = ui.root().place(BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
-        let mut col = bg.child().place(Col::new(0.0));
-        col.child().place(Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
-        col.child().place(Text::new("lorem ipsum dolor sit amet 2".to_string(), style2))
-            .listen(|ctx, e: MousePress| {
-                println!("click");
-            });
-        col.child().place(Button::new());
+            let mut bg = context.root().get_or_place(|| BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
+            let mut col = bg.child().get_or_place(|| Col::new(0.0));
+            col.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
+            col.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 2".to_string(), style2))
+                .listen(|ctx, e: MousePress| {
+                    println!("click");
+                });
+            col.child().get_or_place(|| {println!("replacing");Button::new()})
+                .listen(|ctx, e: ClickEvent| {
+                    println!("button");
+                });
+        }
     }
+
+    ui.place(App);
 
     // // let song = ui.prop(Song::default());
     // // let audio_send = start_audio_thread();
