@@ -415,6 +415,7 @@ impl<'a, C: Component> InstallContext<'a, C> {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct Child {
     parent: Id,
     child: usize,
@@ -805,11 +806,29 @@ impl Component for Button {
         };
 
         let mut bg = context.root().place(BackgroundColor::new(color));
-        bg.listen(|ctx, e: MousePress| {
-            ctx.fire(ClickEvent);
-            ctx.get_mut().state = ButtonState::Down;
+        bg.listen(|ctx, MouseEnter| {
+            ctx.get_mut().state = ButtonState::Hover;
         });
-        bg.child().place(Padding::new(10.0));
+        bg.listen(|ctx, MouseLeave| {
+            ctx.get_mut().state = ButtonState::Up;
+        });
+        bg.listen(|ctx, MousePress(button)| {
+            if button == MouseButton::Left {
+                ctx.get_mut().state = ButtonState::Down;
+            }
+        });
+        bg.listen(|ctx, MouseRelease(button)| {
+            if button == MouseButton::Left {
+                if ctx.get().state == ButtonState::Down {
+                    ctx.get_mut().state = ButtonState::Hover;
+                    ctx.fire(ClickEvent);
+                }
+            }
+        });
+        let mut padding = bg.child().place(Padding::new(10.0));
+        if let Some(child) = children.get(0) {
+            padding.child().place_child(*child);
+        }
     }
 
     // fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
@@ -1143,14 +1162,14 @@ impl KeyboardModifiers {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum MouseButton {
     Left,
     Middle,
     Right,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum KeyboardButton {
     Key1,
     Key2,

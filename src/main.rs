@@ -88,16 +88,17 @@ fn main() {
             let style2 = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
 
             let mut bg = context.root().get_or_place(|| BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
-            let mut col = bg.child().get_or_place(|| Col::new(0.0));
-            col.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
+            let mut padding = bg.child().get_or_place(|| Padding::new(20.0));
+            let mut col = padding.child().get_or_place(|| Col::new(10.0));
             col.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 2".to_string(), style2))
                 .listen(|ctx, e: MousePress| {
                     println!("click");
                 });
-            col.child().get_or_place(|| {println!("replacing");Button::new()})
-                .listen(|ctx, e: ClickEvent| {
+            let mut button = col.child().get_or_place(|| Button::new());
+            button.listen(|ctx, e: ClickEvent| {
                     println!("button");
                 });
+            button.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
         }
     }
 
