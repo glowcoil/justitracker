@@ -258,7 +258,8 @@ impl UI {
                 if let Some(focus) = self.input_state.focus {
                     self.fire_input_event(focus, event)
                 } else {
-                    self.fire_input_event(0, event)
+                    let root = self.layout.id;
+                    self.fire_input_event(root, event)
                 }
             }
         };
@@ -496,6 +497,14 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
         Slot { ui: self.ui, owner: self.owner, id, phantom_data: PhantomData }
     }
 
+    pub fn end(&mut self) {
+        let remaining: Vec<Id> = self.ui.components[self.id].children.drain(self.child_index..).collect();
+        for id in remaining {
+            self.ui.cleanup(id);
+            self.ui.components.remove(id);
+        }
+    }
+
     pub fn listen<E: 'static, F: Fn(&mut EventContext<C>, E) + 'static>(&mut self, callback: F) {
         self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
             id: self.owner,
@@ -580,6 +589,10 @@ impl<'a, C: Component> EventContext<'a, C> {
 
     pub fn show_cursor(&mut self) {
         self.response.hide_cursor = Some(false);
+    }
+
+    pub fn get_input_state(&self) -> &InputState {
+        &self.input_state
     }
 }
 
@@ -884,27 +897,6 @@ impl Component for Button {
             padding.child().place_child(*child);
         }
     }
-
-    // fn handle(&mut self, ctx: &mut ComponentContext<Button>, event: ElementEvent) {
-    //     match event {
-    //         ElementEvent::MouseEnter => {
-    //             ctx.set(self.state, ButtonState::Hover);
-    //         }
-    //         ElementEvent::MouseLeave => {
-    //             ctx.set(self.state, ButtonState::Up);
-    //         }
-    //         ElementEvent::MousePress(MouseButton::Left) => {
-    //             ctx.set(self.state, ButtonState::Down);
-    //         }
-    //         ElementEvent::MouseRelease(MouseButton::Left) => {
-    //             if *ctx.get(self.state) == ButtonState::Down {
-    //                 ctx.set(self.state, ButtonState::Hover);
-    //                 ctx.fire::<ClickEvent>(ClickEvent);
-    //             }
-    //         }
-    //         _ => {}
-    //     }
-    // }
 }
 
 
@@ -1103,12 +1095,12 @@ impl Component for Button {
 // }
 
 
-struct InputState {
-    mouse_position: Point,
-    mouse_left_pressed: bool,
-    mouse_middle_pressed: bool,
-    mouse_right_pressed: bool,
-    modifiers: KeyboardModifiers,
+pub struct InputState {
+    pub mouse_position: Point,
+    pub mouse_left_pressed: bool,
+    pub mouse_middle_pressed: bool,
+    pub mouse_right_pressed: bool,
+    pub modifiers: KeyboardModifiers,
     focus: Option<Id>,
     mouse_focus: Option<Id>,
 }
