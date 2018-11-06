@@ -126,7 +126,7 @@ impl Layout {
 struct Listener<E> {
     id: Id,
     callback: Box<UnsafeAny>,
-    dispatcher: fn(Id, &mut Box<UnsafeAny>, &mut Slab<ComponentData>, &mut InputState, &mut VecDeque<QueueEntry>, E) -> UIEventResponse,
+    dispatcher: fn(Id, Id, &mut Box<UnsafeAny>, &mut Slab<ComponentData>, &mut InputState, &mut VecDeque<QueueEntry>, E) -> UIEventResponse,
 }
 
 struct QueueEntry {
@@ -203,8 +203,8 @@ impl UI {
 
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
         match event {
-            InputEvent::MouseMove(position) => {
-                self.input_state.mouse_position = position;
+            InputEvent::MouseMove(x, y) => {
+                self.input_state.mouse_position = Point::new(x, y);
             }
             InputEvent::MousePress(button) => {
                 match button {
@@ -315,7 +315,7 @@ impl UI {
 
     fn fire_event<E: 'static>(&mut self, id: Id, event: E) -> Option<UIEventResponse> {
         if let Some(listener) = self.listeners[id].get_mut::<Listener<E>>() {
-            Some((listener.dispatcher)(listener.id, &mut listener.callback, &mut self.components, &mut self.input_state, &mut self.queue, event))
+            Some((listener.dispatcher)(id, listener.id, &mut listener.callback, &mut self.components, &mut self.input_state, &mut self.queue, event))
         } else {
             None
         }
@@ -323,7 +323,7 @@ impl UI {
 
     fn fire_input_event(&mut self, id: Id, event: InputEvent) -> Option<UIEventResponse> {
         match event {
-            InputEvent::MouseMove(position) => self.fire_event(id, MouseMove(position)),
+            InputEvent::MouseMove(x, y) => self.fire_event(id, MouseMove(x, y)),
             InputEvent::MousePress(button) => self.fire_event(id, MousePress(button)),
             InputEvent::MouseRelease(button) => self.fire_event(id, MouseRelease(button)),
             InputEvent::MouseScroll(delta) => self.fire_event(id, MouseScroll(delta)),
@@ -500,9 +500,9 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
         self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
             id: self.owner,
             callback: Box::new(callback),
-            dispatcher: |id, callback, components, input_state, queue, event| {
+            dispatcher: |origin, id, callback, components, input_state, queue, event| {
                 let f: &mut F = unsafe { callback.downcast_mut_unchecked() };
-                let mut context = EventContext { id, components, input_state, queue, response: UIEventResponse::default(), phantom_data: PhantomData };
+                let mut context = EventContext { origin, id, components, input_state, queue, response: UIEventResponse::default(), phantom_data: PhantomData };
                 f(&mut context, event);
                 context.response
             },
@@ -513,6 +513,7 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
 /* events */
 
 pub struct EventContext<'a, C: Component> {
+    origin: Id,
     id: Id,
     components: &'a mut Slab<ComponentData>,
     input_state: &'a mut InputState,
@@ -542,27 +543,31 @@ impl<'a, C: Component> EventContext<'a, C> {
     }
 
     pub fn capture_focus(&mut self) {
-        self.input_state.focus = Some(self.id);
+        self.input_state.focus = Some(self.origin);
     }
 
     pub fn release_focus(&mut self) {
-        if self.input_state.focus == Some(self.id) {
+        if self.input_state.focus == Some(self.origin) {
             self.input_state.focus = None;
         }
     }
 
     pub fn capture_mouse(&mut self) {
-        self.input_state.focus = Some(self.id);
+        self.input_state.mouse_focus = Some(self.origin);
     }
 
     pub fn release_mouse(&mut self) {
-        if self.input_state.focus == Some(self.id) {
-            self.input_state.focus = None;
+        if self.input_state.mouse_focus == Some(self.origin) {
+            self.input_state.mouse_focus = None;
         }
     }
 
     pub fn set_mouse_position(&mut self, x: f32, y: f32) {
         self.response.mouse_position = Some(Point::new(x, y));
+    }
+
+    pub fn get_mouse_position(&mut self) -> (f32, f32) {
+        (self.input_state.mouse_position.x, self.input_state.mouse_position.y)
     }
 
     pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
@@ -1124,7 +1129,7 @@ impl Default for InputState {
 
 #[derive(Copy, Clone, Debug)]
 pub enum InputEvent {
-    MouseMove(Point),
+    MouseMove(f32, f32),
     MousePress(MouseButton),
     MouseRelease(MouseButton),
     MouseScroll(f32),
@@ -1140,25 +1145,25 @@ pub struct MouseEnter;
 pub struct MouseLeave;
 
 #[derive(Copy, Clone, Debug)]
-pub struct MouseMove(Point);
+pub struct MouseMove(pub f32, pub f32);
 
 #[derive(Copy, Clone, Debug)]
-pub struct MousePress(MouseButton);
+pub struct MousePress(pub MouseButton);
 
 #[derive(Copy, Clone, Debug)]
-pub struct MouseRelease(MouseButton);
+pub struct MouseRelease(pub MouseButton);
 
 #[derive(Copy, Clone, Debug)]
-pub struct MouseScroll(f32);
+pub struct MouseScroll(pub f32);
 
 #[derive(Copy, Clone, Debug)]
-pub struct KeyPress(KeyboardButton);
+pub struct KeyPress(pub KeyboardButton);
 
 #[derive(Copy, Clone, Debug)]
-pub struct KeyRelease(KeyboardButton);
+pub struct KeyRelease(pub KeyboardButton);
 
 #[derive(Copy, Clone, Debug)]
-pub struct TextInput(char);
+pub struct TextInput(pub char);
 
 #[derive(Copy, Clone)]
 pub struct UIEventResponse {

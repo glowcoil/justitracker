@@ -294,7 +294,7 @@ fn main() {
                     None
                 }
                 glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
-                    Some(InputEvent::MouseMove(Point { x: x as f32, y: y as f32 }))
+                    Some(InputEvent::MouseMove(x as f32, y as f32))
                 }
                 glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
                     ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
@@ -378,69 +378,67 @@ fn main() {
 }
 
 
-// struct IntegerInput {
-//     value: Prop<i32>,
-//     style: Ref<TextStyle>,
-//     on_change: Option<Box<Fn(&mut EventContext, i32)>>,
-// }
+struct IntegerInput {
+    value: i32,
+    style: TextStyle,
+    old: i32,
+    delta: f32,
+    drag_origin: (f32, f32),
+    dragging: bool,
+}
 
-// impl IntegerInput {
-//     fn new(value: Prop<i32>, style: Ref<TextStyle>) -> IntegerInput {
-//         IntegerInput { value: value, style: style, on_change: None }
-//     }
+impl IntegerInput {
+    fn new(value: i32, style: TextStyle) -> IntegerInput {
+        IntegerInput {
+            value,
+            style,
+            old: value,
+            delta: 0.0,
+            drag_origin: (0.0, 0.0),
+            dragging: false,
+        }
+    }
 
-//     pub fn on_change<F: Fn(&mut EventContext, i32) + 'static>(mut self, on_change: F) -> IntegerInput {
-//         self.on_change = Some(Box::new(on_change));
-//         self
-//     }
+    fn start_dragging(&mut self, mouse_position: (f32, f32)) {
+        self.dragging = true;
+        self.old = self.value;
+        self.delta = 0.0;
+        self.drag_origin = mouse_position;
+    }
 
-//     fn install(self, ui: &mut impl Install) -> ElementRef {
-//         let old = ui.prop(None);
-//         let delta = ui.prop(None);
-//         let drag_origin = ui.prop(None);
+    fn drag(&mut self, mouse_position: (f32, f32)) -> i32 {
+        self.delta -= (mouse_position.1 - self.drag_origin.1) / 8.0;
+        self.value = (self.old as f32 + self.delta) as i32;
+        self.value
+    }
+}
 
-//         let string = ui.map(self.value, |value| value.to_string());
-//         let text = Text::new(string.into(), self.style).install(ui);
-//         ui.listen(text, move |ctx, event| {
-//             match event {
-//                 ElementEvent::MousePress(MouseButton::Left) => {
-//                     ctx.capture_mouse(text);
-//                     ctx.hide_cursor();
-
-//                     let value = *ctx.get(self.value);
-//                     ctx.set(old, Some(value));
-//                     ctx.set(delta, Some(0.0));
-//                     let mouse_position = ctx.get_mouse_position();
-//                     ctx.set(drag_origin, Some(mouse_position));
-//                 }
-//                 ElementEvent::MouseMove(position) => {
-//                     if let Some(drag_origin) = *ctx.get(drag_origin) {
-//                         let old_value = ctx.get(old).unwrap();
-//                         let delta_value = ctx.get(delta).unwrap() - (position.y - drag_origin.y) / 8.0;
-//                         ctx.set(delta, Some(delta_value));
-//                         ctx.set(self.value, (old_value as f32 + delta_value) as i32);
-//                         ctx.set_mouse_position(drag_origin);
-
-//                         if let Some(ref on_change) = self.on_change {
-//                             let value = *ctx.get(self.value);
-//                             on_change(ctx, value);
-//                         }
-//                     }
-//                 }
-//                 ElementEvent::MouseRelease(MouseButton::Left) => {
-//                     ctx.relinquish_mouse(text);
-//                     ctx.show_cursor();
-
-//                     ctx.set(old, None);
-//                     ctx.set(delta, None);
-//                     ctx.set(drag_origin, None);
-//                 }
-//                 _ => {}
-//             }
-//         });
-//         text
-//     }
-// }
+impl Component for IntegerInput {
+    fn install(&self, context: &mut InstallContext<IntegerInput>, children: &[Child]) {
+        let mut text = context.root().get_or_place(|| Text::new(self.value.to_string(), self.style.clone()));
+        text.get_mut().text(self.value.to_string());
+        text.listen(|ctx, MousePress(button)| {
+            ctx.capture_mouse();
+            ctx.hide_cursor();
+            let mouse_position = ctx.get_mouse_position();
+            ctx.get_mut().start_dragging(mouse_position);
+        });
+        text.listen(|ctx, MouseMove(x, y)| {
+            if ctx.get().dragging {
+                let mouse_position = ctx.get_mouse_position();
+                let drag_origin = ctx.get().drag_origin;
+                ctx.set_mouse_position(drag_origin.0, drag_origin.1);
+                let value = ctx.get_mut().drag(mouse_position);
+                ctx.fire(value);
+            }
+        });
+        text.listen(|ctx, MouseRelease(button)| {
+            ctx.release_mouse();
+            ctx.show_cursor();
+            ctx.get_mut().dragging = false;
+        });
+    }
+}
 
 
 // struct NoteElement {
