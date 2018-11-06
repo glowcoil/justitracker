@@ -32,13 +32,13 @@ pub trait Component {
             (0.0, 0.0)
         }
     }
-    fn display(&self, _bounds: BoundingBox, list: &mut DisplayList) {}
+    fn display(&self, _width: f32, _height: f32, _list: &mut DisplayList) {}
 }
 
 trait ComponentWrapper {
     fn install(&self, ui: &mut UI, id: Id, children: &[Child]);
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32);
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList);
+    fn display(&self, width: f32, height: f32, list: &mut DisplayList);
     fn get_type_id(&self) -> TypeId where Self: 'static { TypeId::of::<Self>() }
 }
 
@@ -61,8 +61,8 @@ impl<C: Component> ComponentWrapper for C {
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         self.layout(max_width, max_height, children)
     }
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
-        self.display(bounds, list);
+    fn display(&self, width: f32, height: f32, list: &mut DisplayList) {
+        self.display(width, height, list);
     }
 }
 
@@ -278,8 +278,9 @@ impl UI {
     fn trace_inner(&self, mouse_position: Point, layout: &Layout, under_cursor: &mut Vec<Id>) -> bool {
         if layout.bounds.contains_point(mouse_position) {
             under_cursor.push(layout.id);
+            let mouse_adjusted = mouse_position - layout.bounds.pos;
             for child in layout.children.iter() {
-                if self.trace_inner(mouse_position, child, under_cursor) {
+                if self.trace_inner(mouse_adjusted, child, under_cursor) {
                     return true;
                 }
             }
@@ -341,17 +342,20 @@ impl UI {
     }
 
     fn display_component(&self, layout: &Layout, list: &mut DisplayList) {
-        self.components[layout.id].component.display(layout.bounds, list);
+        list.push_translate(layout.bounds.pos);
+        self.components[layout.id].component.display(layout.bounds.size.x, layout.bounds.size.y, list);
         for child in layout.children.iter() {
             self.display_component(child, list);
         }
+        list.pop_translate();
     }
 
     /* layout */
 
     fn layout(&mut self) {
         self.layout = Layout::new(find_leaf(&self.components, 0));
-        LayoutChild { components: &self.components, layout: &mut self.layout }.layout(self.width, self.height);
+        LayoutChild { components: &self.components, layout: &mut self.layout }
+            .layout(self.width, self.height);
         // println!("{:#?}", &self.layout);
     }
 
@@ -569,8 +573,8 @@ impl BackgroundColor {
 }
 
 impl Component for BackgroundColor {
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
-        list.rect(Rect { x: bounds.pos.x, y: bounds.pos.y, w: bounds.size.x, h: bounds.size.y, color: self.color });
+    fn display(&self, width: f32, height: f32, list: &mut DisplayList) {
+        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.color });
     }
 }
 
@@ -755,7 +759,7 @@ impl Text {
         }
 
         let width = if wrapped { max_width } else { caret.x };
-        (width, caret.y)
+        (width, caret.y - v_metrics.descent)
     }
 }
 
@@ -764,10 +768,10 @@ impl Component for Text {
         self.layout_text(max_width)
     }
 
-    fn display(&self, bounds: BoundingBox, list: &mut DisplayList) {
+    fn display(&self, width: f32, height: f32, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
-            list.glyph(glyph.clone().into_unpositioned().positioned(point(bounds.pos.x + position.x, bounds.pos.y + position.y)));
+            list.glyph(glyph.clone().into_unpositioned().positioned(point(position.x, position.y)));
         }
     }
 }
