@@ -695,8 +695,9 @@ impl Component for Col {
 }
 
 
+#[derive(Clone)]
 pub struct TextStyle {
-    pub font: Font<'static>,
+    pub font: Rc<Font<'static>>,
     pub scale: Scale,
 }
 
