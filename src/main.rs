@@ -431,8 +431,11 @@ impl Component for IntegerInput {
                 let mouse_position = ctx.get_mouse_position();
                 let drag_origin = ctx.get().drag_origin;
                 ctx.set_mouse_position(drag_origin.0, drag_origin.1);
+                let previous = ctx.get().value;
                 let value = ctx.get_mut().drag(mouse_position);
-                ctx.fire(value);
+                if value != previous {
+                    ctx.fire(value);
+                }
             }
         });
         text.listen(|ctx, MouseRelease(button)| {
