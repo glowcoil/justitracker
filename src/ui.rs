@@ -79,8 +79,6 @@ pub struct UI {
     layout: Layout,
 
     under_cursor: HashSet<Id>,
-    focus: Option<Id>,
-    mouse_focus: Option<Id>,
     input_state: InputState,
 
     queue: VecDeque<QueueEntry>,
@@ -128,7 +126,7 @@ impl Layout {
 struct Listener<E> {
     id: Id,
     callback: Box<UnsafeAny>,
-    dispatcher: fn(Id, &mut Box<UnsafeAny>, &mut Slab<ComponentData>, &mut VecDeque<QueueEntry>, E),
+    dispatcher: fn(Id, &mut Box<UnsafeAny>, &mut Slab<ComponentData>, &mut InputState, &mut VecDeque<QueueEntry>, E) -> UIEventResponse,
 }
 
 struct QueueEntry {
@@ -148,8 +146,6 @@ impl UI {
             layout: Layout::new(0),
 
             under_cursor: HashSet::new(),
-            focus: None,
-            mouse_focus: None,
             input_state: InputState::default(),
 
             queue: VecDeque::new(),
@@ -243,28 +239,34 @@ impl UI {
 
         let mut ui_response: UIEventResponse = Default::default();
 
-        let handler = match event {
+        let response = match event {
             InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
-                if let Some(mouse_focus) = self.mouse_focus {
-                    self.fire_input_event(mouse_focus, event);
+                if let Some(mouse_focus) = self.input_state.mouse_focus {
+                    self.fire_input_event(mouse_focus, event)
                 } else {
+                    let mut response = None;
                     for component in path.iter().rev() {
-                        if self.fire_input_event(*component, event) {
+                        response = self.fire_input_event(*component, event);
+                        if response.is_some() {
                             break;
                         }
                     }
+                    response
                 }
             },
             InputEvent::KeyPress(..) | InputEvent::KeyRelease(..) | InputEvent::TextInput(..) => {
-                if let Some(focus) = self.focus {
-                    self.fire_input_event(focus, event);
+                if let Some(focus) = self.input_state.focus {
+                    self.fire_input_event(focus, event)
                 } else {
-                    self.fire_input_event(0, event);
+                    self.fire_input_event(0, event)
                 }
             }
         };
+        if let Some(response) = response {
+            ui_response.merge(response);
+        }
 
-        self.mouse_enter_leave(&path);
+        ui_response.merge(self.mouse_enter_leave(&path));
 
         ui_response
     }
@@ -288,32 +290,38 @@ impl UI {
         false
     }
 
-    fn mouse_enter_leave(&mut self, path: &[Id]) {
+    fn mouse_enter_leave(&mut self, path: &[Id]) -> UIEventResponse {
         let old_under_cursor = mem::replace(&mut self.under_cursor, HashSet::new());
 
         let mut new_under_cursor = HashSet::new();
         new_under_cursor.extend(path.iter());
 
+        let mut ui_response = UIEventResponse::default();
         for new in new_under_cursor.difference(&old_under_cursor) {
-            self.fire_event(*new, MouseEnter);
+            if let Some(response) = self.fire_event(*new, MouseEnter) {
+                ui_response.merge(response);
+            }
         }
         for old in old_under_cursor.difference(&new_under_cursor) {
-            self.fire_event(*old, MouseLeave);
+            if let Some(response) = self.fire_event(*old, MouseLeave) {
+                ui_response.merge(response);
+            }
         }
 
         self.under_cursor = new_under_cursor;
+
+        ui_response
     }
 
-    fn fire_event<E: 'static>(&mut self, id: Id, event: E) -> bool {
+    fn fire_event<E: 'static>(&mut self, id: Id, event: E) -> Option<UIEventResponse> {
         if let Some(listener) = self.listeners[id].get_mut::<Listener<E>>() {
-            (listener.dispatcher)(listener.id, &mut listener.callback, &mut self.components, &mut self.queue, event);
-            true
+            Some((listener.dispatcher)(listener.id, &mut listener.callback, &mut self.components, &mut self.input_state, &mut self.queue, event))
         } else {
-            false
+            None
         }
     }
 
-    fn fire_input_event(&mut self, id: Id, event: InputEvent) -> bool {
+    fn fire_input_event(&mut self, id: Id, event: InputEvent) -> Option<UIEventResponse> {
         match event {
             InputEvent::MouseMove(position) => self.fire_event(id, MouseMove(position)),
             InputEvent::MousePress(button) => self.fire_event(id, MousePress(button)),
@@ -492,9 +500,11 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
         self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
             id: self.owner,
             callback: Box::new(callback),
-            dispatcher: |id, callback, components, queue, event| {
+            dispatcher: |id, callback, components, input_state, queue, event| {
                 let f: &mut F = unsafe { callback.downcast_mut_unchecked() };
-                f(&mut EventContext { id, components, queue, phantom_data: PhantomData }, event);
+                let mut context = EventContext { id, components, input_state, queue, response: UIEventResponse::default(), phantom_data: PhantomData };
+                f(&mut context, event);
+                context.response
             },
         });
     }
@@ -505,7 +515,9 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
 pub struct EventContext<'a, C: Component> {
     id: Id,
     components: &'a mut Slab<ComponentData>,
+    input_state: &'a mut InputState,
     queue: &'a mut VecDeque<QueueEntry>,
+    response: UIEventResponse,
     phantom_data: PhantomData<C>,
 }
 
@@ -527,6 +539,42 @@ impl<'a, C: Component> EventContext<'a, C> {
             },
             event: Box::new(event),
         });
+    }
+
+    pub fn capture_focus(&mut self) {
+        self.input_state.focus = Some(self.id);
+    }
+
+    pub fn release_focus(&mut self) {
+        if self.input_state.focus == Some(self.id) {
+            self.input_state.focus = None;
+        }
+    }
+
+    pub fn capture_mouse(&mut self) {
+        self.input_state.focus = Some(self.id);
+    }
+
+    pub fn release_mouse(&mut self) {
+        if self.input_state.focus == Some(self.id) {
+            self.input_state.focus = None;
+        }
+    }
+
+    pub fn set_mouse_position(&mut self, x: f32, y: f32) {
+        self.response.mouse_position = Some(Point::new(x, y));
+    }
+
+    pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
+        self.response.mouse_cursor = Some(cursor);
+    }
+
+    pub fn hide_cursor(&mut self) {
+        self.response.hide_cursor = Some(true);
+    }
+
+    pub fn show_cursor(&mut self) {
+        self.response.hide_cursor = Some(false);
     }
 }
 
@@ -1056,6 +1104,8 @@ struct InputState {
     mouse_middle_pressed: bool,
     mouse_right_pressed: bool,
     modifiers: KeyboardModifiers,
+    focus: Option<Id>,
+    mouse_focus: Option<Id>,
 }
 
 impl Default for InputState {
@@ -1066,6 +1116,8 @@ impl Default for InputState {
             mouse_middle_pressed: false,
             mouse_right_pressed: false,
             modifiers: KeyboardModifiers::default(),
+            focus: None,
+            mouse_focus: None,
         }
     }
 }
@@ -1127,9 +1179,9 @@ impl Default for UIEventResponse {
 
 impl UIEventResponse {
     fn merge(&mut self, other: UIEventResponse) {
-        self.mouse_position = self.mouse_position.or(other.mouse_position);
-        self.mouse_cursor = self.mouse_cursor.or(other.mouse_cursor);
-        self.hide_cursor = self.hide_cursor.or(other.hide_cursor);
+        self.mouse_position = other.mouse_position.or(self.mouse_position);
+        self.mouse_cursor = other.mouse_cursor.or(self.mouse_cursor);
+        self.hide_cursor = other.hide_cursor.or(self.hide_cursor);
     }
 }
 
