@@ -18,9 +18,10 @@ extern crate priority_queue;
 
 use glium::glutin;
 
-use rusttype::{FontCollection, Scale};
+use rusttype::{FontCollection, Font, Scale};
 
 use std::sync::mpsc;
+use std::rc::Rc;
 
 use render::*;
 use ui::*;
@@ -78,31 +79,33 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
 
-    struct App;
+    struct App {
+        song: Song,
+        audio_send: mpsc::Sender<AudioMessage>,
+        cursor: (usize, usize),
+        font: Rc<Font<'static>>,
+    }
     impl Component for App {
         fn install(&self, context: &mut InstallContext<App>, children: &[Child]) {
-            let collection = FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]);
-            let font = collection.into_font().unwrap();
+            let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(14.0) };
 
-            let style = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
-            let style2 = TextStyle { font: font.clone(), scale: Scale::uniform(14.0) };
-
-            let mut bg = context.root().get_or_place(|| BackgroundColor::new([0.0, 0.0, 0.0, 1.0]));
-            let mut padding = bg.child().get_or_place(|| Padding::new(20.0));
-            let mut col = padding.child().get_or_place(|| Col::new(10.0));
-            col.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 2".to_string(), style2))
-                .listen(|ctx, e: MousePress| {
-                    println!("click");
-                });
-            let mut button = col.child().get_or_place(|| Button::new());
-            button.listen(|ctx, e: ClickEvent| {
-                    println!("button");
-                });
-            button.child().get_or_place(move || Text::new("lorem ipsum dolor sit amet 1".to_string(), style));
+            let mut controls = context.root().get_or_place(|| Row::new(5.0));
+            controls.child().get_or_place(|| Button::new())
+                .child().get_or_place(|| Text::new("play".to_string(), style.clone()));
+            controls.child().get_or_place(|| Button::new())
+                .child().get_or_place(|| Text::new("stop".to_string(), style.clone()));
+            controls.child().get_or_place(|| Text::new("bpm:".to_string(), style.clone()));
+            controls.child().get_or_place(|| IntegerInput::new(120, style.clone()));
+            controls.child().get_or_place(|| Text::new("len:".to_string(), style.clone()));
+            controls.child().get_or_place(|| IntegerInput::new(8, style.clone()));
         }
     }
-
-    ui.place(App);
+    ui.place(App {
+         song: Song::default(),
+         audio_send: start_audio_thread(),
+         cursor: (0, 0),
+         font: Rc::new(FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]).into_font().unwrap()),
+    });
 
     // // let song = ui.prop(Song::default());
     // // let audio_send = start_audio_thread();
