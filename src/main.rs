@@ -170,7 +170,15 @@ fn main() {
                             if let Ok(result) = nfd::dialog().filter("wav").open() {
                                 match result {
                                     nfd::Response::Okay(path) => {
-                                        let samples: Vec<f32> = hound::WavReader::open(path).unwrap().samples::<f32>().map(|s| s.unwrap()).collect();
+                                        let wave = hound::WavReader::open(path).unwrap();
+                                        let samples: Vec<f32> = match wave.spec().sample_format {
+                                            hound::SampleFormat::Float => {
+                                                wave.into_samples::<f32>().map(|s| s.unwrap()).collect()
+                                            }
+                                            hound::SampleFormat::Int => {
+                                                wave.into_samples::<i32>().map(|s| s.unwrap() as f32).collect()
+                                            }
+                                        };
                                         ctx.get_mut().song.samples[i] = samples;
                                         ctx.get_mut().update();
                                     }
