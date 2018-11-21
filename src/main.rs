@@ -128,8 +128,11 @@ fn main() {
                     play.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Play).unwrap() });
                     play.child().get_or_place(|| Text::new("play".to_string(), style.clone()));
                 }
-                controls.child().get_or_place(|| Button::new())
-                    .child().get_or_place(|| Text::new("stop".to_string(), style.clone()));
+                {
+                    let mut stop = controls.child().get_or_place(|| Button::new());
+                    stop.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Stop).unwrap() });
+                    stop.child().get_or_place(|| Text::new("stop".to_string(), style.clone()));
+                }
                 controls.child().get_or_place(|| Text::new("bpm:".to_string(), style.clone()));
                 {
                     let mut bpm = controls.child().get_or_place(|| IntegerInput::new(self.song.bpm as i32, style.clone()));
