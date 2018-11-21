@@ -179,7 +179,7 @@ fn main() {
                                                 wave.into_samples::<f32>().map(|s| s.unwrap()).collect()
                                             }
                                             hound::SampleFormat::Int => {
-                                                wave.into_samples::<i32>().map(|s| s.unwrap() as f32).collect()
+                                                wave.into_samples::<i32>().map(|s| s.unwrap() as f32 / 32768.0).collect()
                                             }
                                         };
                                         ctx.get_mut().song.samples[i] = samples;
