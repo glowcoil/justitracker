@@ -117,7 +117,7 @@ fn main() {
     }
     impl Component for App {
         fn install(&self, context: &mut InstallContext<App>, children: &[Child]) {
-            let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(14.0) };
+            let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(19.0) };
 
             let mut root = context.root().get_or_place(|| Col::new(5.0));
 
@@ -265,7 +265,7 @@ fn main() {
          song: Song::default(),
          audio_send: start_audio_thread(),
          cursor: (0, 0),
-         font: Rc::new(FontCollection::from_bytes(include_bytes!("../EPKGOBLD.TTF") as &[u8]).into_font().unwrap()),
+         font: Rc::new(FontCollection::from_bytes(include_bytes!("../sawarabi-gothic-medium.ttf") as &[u8]).into_font().unwrap()),
     });
 
     renderer.render(ui.display());
