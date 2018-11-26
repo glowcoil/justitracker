@@ -874,7 +874,8 @@ impl Component for Button {
             ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
         };
 
-        let mut bg = context.root().place(BackgroundColor::new(color));
+        let mut bg = context.root().get_or_place(|| BackgroundColor::new(color));
+        bg.get_mut().color(color);
         bg.listen(|ctx, MouseEnter| {
             ctx.get_mut().state = ButtonState::Hover;
         });
@@ -894,7 +895,7 @@ impl Component for Button {
                 }
             }
         });
-        let mut padding = bg.child().place(Padding::new(10.0));
+        let mut padding = bg.child().get_or_place(|| Padding::new(10.0));
         if let Some(child) = children.get(0) {
             padding.child().place_child(*child);
         }
