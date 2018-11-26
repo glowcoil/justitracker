@@ -215,9 +215,7 @@ fn main() {
                             ctx.get_mut().update();
                         });
                     }
-                    col.end();
                 }
-                notes.end();
             }
 
             root.listen(|ctx, KeyPress(button)| {

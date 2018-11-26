@@ -497,14 +497,6 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
         Slot { ui: self.ui, owner: self.owner, id, phantom_data: PhantomData }
     }
 
-    pub fn end(&mut self) {
-        let remaining: Vec<Id> = self.ui.components[self.id].children.drain(self.child_index..).collect();
-        for id in remaining {
-            self.ui.cleanup(id);
-            self.ui.components.remove(id);
-        }
-    }
-
     pub fn listen<E: 'static, F: Fn(&mut EventContext<C>, E) + 'static>(&mut self, callback: F) {
         self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
             id: self.owner,
@@ -516,6 +508,16 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
                 context.response
             },
         });
+    }
+}
+
+impl<'a, C: Component, D: Component> Drop for ComponentRef<'a, C, D> {
+    fn drop(&mut self) {
+        let remaining: Vec<Id> = self.ui.components[self.id].children.drain(self.child_index..).collect();
+        for id in remaining {
+            self.ui.cleanup(id);
+            self.ui.components.remove(id);
+        }
     }
 }
 
