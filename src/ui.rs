@@ -23,7 +23,10 @@ use render::*;
 
 /* component */
 
-pub trait Component {
+pub trait Component: Sized {
+    fn reconcile(&mut self, new: Self) {
+        *self = new;
+    }
     fn install(&self, context: &mut InstallContext<Self>, children: &[Child]) {}
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
@@ -438,26 +441,14 @@ pub struct Slot<'a, C> {
 }
 
 impl<'a, C: Component> Slot<'a, C> {
-    pub fn get<D: Component + 'static>(self) -> Option<ComponentRef<'a, C, D>> {
-        if self.ui.components[self.id].component.is::<D>() {
-            Some(ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData })
-        } else {
-            None
-        }
-    }
-
     pub fn place<D: Component + 'static>(self, component: D) -> ComponentRef<'a, C, D> {
-        self.ui.cleanup(self.id);
-        self.ui.components[self.id] = ComponentData::new(Box::new(component));
-        ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData }
-    }
-
-    pub fn get_or_place<D: Component + 'static, F: FnOnce() -> D>(self, f: F) -> ComponentRef<'a, C, D> {
         if self.ui.components[self.id].component.is::<D>() {
-            ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData }
+            unsafe { self.ui.components[self.id].component.downcast_mut_unchecked::<D>() }.reconcile(component);
         } else {
-            self.place(f())
+            self.ui.cleanup(self.id);
+            self.ui.components[self.id] = ComponentData::new(Box::new(component));
         }
+        ComponentRef { ui: self.ui, owner: self.owner, id: self.id, child_index: 0, phantom_data: PhantomData }
     }
 
     pub fn place_child(self, child: Child) {
@@ -867,6 +858,8 @@ impl Button {
 }
 
 impl Component for Button {
+    fn reconcile(&mut self, new: Button) {}
+
     fn install(&self, context: &mut InstallContext<Button>, children: &[Child]) {
         let color = match self.state {
             ButtonState::Up => [0.15, 0.18, 0.23, 1.0],
@@ -874,8 +867,7 @@ impl Component for Button {
             ButtonState::Down => [0.02, 0.2, 0.6, 1.0],
         };
 
-        let mut bg = context.root().get_or_place(|| BackgroundColor::new(color));
-        bg.get_mut().color(color);
+        let mut bg = context.root().place(BackgroundColor::new(color));
         bg.listen(|ctx, MouseEnter| {
             ctx.get_mut().state = ButtonState::Hover;
         });
@@ -895,7 +887,7 @@ impl Component for Button {
                 }
             }
         });
-        let mut padding = bg.child().get_or_place(|| Padding::new(10.0));
+        let mut padding = bg.child().place(Padding::new(10.0));
         if let Some(child) = children.get(0) {
             padding.child().place_child(*child);
         }

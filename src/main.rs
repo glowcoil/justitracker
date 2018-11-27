@@ -119,33 +119,31 @@ fn main() {
         fn install(&self, context: &mut InstallContext<App>, children: &[Child]) {
             let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(19.0) };
 
-            let mut root = context.root().get_or_place(|| Col::new(5.0));
+            let mut root = context.root().place(Col::new(5.0));
 
             {
-                let mut controls = root.child().get_or_place(|| Row::new(5.0));
+                let mut controls = root.child().place(Row::new(5.0));
                 {
-                    let mut play = controls.child().get_or_place(|| Button::new());
+                    let mut play = controls.child().place(Button::new());
                     play.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Play).unwrap() });
-                    play.child().get_or_place(|| Text::new("play".to_string(), style.clone()));
+                    play.child().place(Text::new("play".to_string(), style.clone()));
                 }
                 {
-                    let mut stop = controls.child().get_or_place(|| Button::new());
+                    let mut stop = controls.child().place(Button::new());
                     stop.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Stop).unwrap() });
-                    stop.child().get_or_place(|| Text::new("stop".to_string(), style.clone()));
+                    stop.child().place(Text::new("stop".to_string(), style.clone()));
                 }
-                controls.child().get_or_place(|| Text::new("bpm:".to_string(), style.clone()));
+                controls.child().place(Text::new("bpm:".to_string(), style.clone()));
                 {
-                    let mut bpm = controls.child().get_or_place(|| IntegerInput::new(self.song.bpm as i32, style.clone()));
-                    bpm.get_mut().value(self.song.bpm as i32);
+                    let mut bpm = controls.child().place(IntegerInput::new(self.song.bpm as i32, style.clone()));
                     bpm.listen(|ctx, value: i32| {
                         ctx.get_mut().song.bpm = value as u32;
                         ctx.get_mut().update();
                     });
                 }
-                controls.child().get_or_place(|| Text::new("len:".to_string(), style.clone()));
+                controls.child().place(Text::new("len:".to_string(), style.clone()));
                 {
-                    let mut ptn_len = controls.child().get_or_place(|| IntegerInput::new(self.song.ptn_len as i32, style.clone()));
-                    ptn_len.get_mut().value(self.song.ptn_len as i32);
+                    let mut ptn_len = controls.child().place(IntegerInput::new(self.song.ptn_len as i32, style.clone()));
                     ptn_len.listen(|ctx, value: i32| {
                         let value = value.max(1) as usize;
                         ctx.get_mut().set_ptn_len(value);
@@ -153,22 +151,22 @@ fn main() {
                     });
                 }
                 {
-                    let mut add = controls.child().get_or_place(|| Button::new());
+                    let mut add = controls.child().place(Button::new());
                     add.listen(|ctx, ClickEvent| {
                         ctx.get_mut().add_track();
                         ctx.get_mut().update();
                     });
-                    add.child().get_or_place(|| Text::new("add".to_string(), style.clone()));
+                    add.child().place(Text::new("add".to_string(), style.clone()));
                 }
             }
 
             {
-                let mut notes = root.child().get_or_place(|| Row::new(5.0));
+                let mut notes = root.child().place(Row::new(5.0));
                 for i in 0..self.song.notes.len() {
-                    let mut col = notes.child().get_or_place(|| Col::new(5.0));
+                    let mut col = notes.child().place(Col::new(5.0));
 
                     {
-                        let mut inst = col.child().get_or_place(|| Button::new());
+                        let mut inst = col.child().place(Button::new());
                         inst.listen(move |ctx, ClickEvent| {
                             if let Ok(result) = nfd::dialog().filter("wav").open() {
                                 match result {
@@ -189,27 +187,26 @@ fn main() {
                                 }
                             }
                         });
-                        inst.child().get_or_place(|| Text::new("inst".to_string(), style.clone()));
+                        inst.child().place(Text::new("inst".to_string(), style.clone()));
                     }
 
                     {
-                        let mut del = col.child().get_or_place(|| Button::new());
+                        let mut del = col.child().place(Button::new());
                         del.listen(move |ctx, ClickEvent| {
                             ctx.get_mut().delete_track(i);
                             ctx.get_mut().update();
                         });
-                        del.child().get_or_place(|| Text::new("del".to_string(), style.clone()));
+                        del.child().place(Text::new("del".to_string(), style.clone()));
                     }
 
                     for j in 0..self.song.ptn_len {
-                        let mut bg = col.child().get_or_place(|| BackgroundColor::new([0.0, 0.0, 0.0, 0.0]));
-                        if (i,j) == self.cursor {
-                            bg.get_mut().color([0.02, 0.2, 0.6, 1.0]);
+                        let color = if (i,j) == self.cursor {
+                            [0.02, 0.2, 0.6, 1.0]
                         } else {
-                            bg.get_mut().color([0.0, 0.0, 0.0, 0.0]);
-                        }
-                        let mut note = bg.child().get_or_place(|| NoteElement::new(4, Note::None, style.clone()));
-                        note.get_mut().value(self.song.notes[i][j].clone());
+                            [0.0, 0.0, 0.0, 0.0]
+                        };
+                        let mut bg = col.child().place(BackgroundColor::new(color));
+                        let mut note = bg.child().place(NoteElement::new(4, self.song.notes[i][j].clone(), style.clone()));
                         note.listen(move |ctx, value: Note| {
                             ctx.get_mut().song.notes[i][j] = value.clone();
                             ctx.get_mut().update();
@@ -405,8 +402,13 @@ impl IntegerInput {
 }
 
 impl Component for IntegerInput {
+    fn reconcile(&mut self, new: IntegerInput) {
+        self.value = new.value;
+        self.style = new.style;
+    }
+
     fn install(&self, context: &mut InstallContext<IntegerInput>, children: &[Child]) {
-        let mut text = context.root().get_or_place(|| Text::new(self.value.to_string(), self.style.clone()));
+        let mut text = context.root().place(Text::new(self.value.to_string(), self.style.clone()));
         text.get_mut().text(self.value.to_string());
         text.listen(|ctx, MousePress(button)| {
             ctx.capture_mouse();
@@ -453,14 +455,13 @@ impl NoteElement {
 
 impl Component for NoteElement {
     fn install(&self, context: &mut InstallContext<NoteElement>, children: &[Child]) {
-        let mut padding = context.root().get_or_place(|| Padding::new(2.0));
-        let mut row = padding.child().get_or_place(|| Row::new(5.0));
+        let mut padding = context.root().place(Padding::new(2.0));
+        let mut row = padding.child().place(Row::new(5.0));
 
         match self.value {
             Note::On(ref factors) => {
                 for i in 0..factors.len() {
-                    let mut factor = row.child().get_or_place(|| IntegerInput::new(factors[i] as i32, self.style.clone()));
-                    factor.get_mut().value(factors[i] as i32);
+                    let mut factor = row.child().place(IntegerInput::new(factors[i] as i32, self.style.clone()));
                     factor.listen(move |ctx, value: i32| {
                         if let Note::On(ref mut factors) = ctx.get_mut().value {
                             factors[i] = value;
