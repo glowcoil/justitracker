@@ -468,14 +468,6 @@ pub struct ComponentRef<'a, C: Component, D: Component> {
 }
 
 impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
-    pub fn get(&self) -> &D {
-        unsafe { self.ui.components[self.id].component.downcast_ref_unchecked() }
-    }
-
-    pub fn get_mut(&mut self) -> &mut D {
-        unsafe { self.ui.components[self.id].component.downcast_mut_unchecked() }
-    }
-
     pub fn child<'b>(&'b mut self) -> Slot<'b, C> {
         let id = if self.child_index == self.ui.components[self.id].children.len() {
             let id = self.ui.component(Box::new(Empty));
@@ -488,7 +480,7 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
         Slot { ui: self.ui, owner: self.owner, id, phantom_data: PhantomData }
     }
 
-    pub fn listen<E: 'static, F: Fn(&mut EventContext<C>, E) + 'static>(&mut self, callback: F) {
+    pub fn listen<E: 'static, F: Fn(&mut EventContext<C>, E) + 'static>(&mut self, callback: F) -> &mut Self {
         self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
             id: self.owner,
             callback: Box::new(callback),
@@ -499,6 +491,7 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
                 context.response
             },
         });
+        self
     }
 }
 

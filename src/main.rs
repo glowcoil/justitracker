@@ -409,7 +409,6 @@ impl Component for IntegerInput {
 
     fn install(&self, context: &mut InstallContext<IntegerInput>, children: &[Child]) {
         let mut text = context.root().place(Text::new(self.value.to_string(), self.style.clone()));
-        text.get_mut().text(self.value.to_string());
         text.listen(|ctx, MousePress(button)| {
             ctx.capture_mouse();
             ctx.hide_cursor();
