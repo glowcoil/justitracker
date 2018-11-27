@@ -441,7 +441,7 @@ pub struct Slot<'a, C> {
 }
 
 impl<'a, C: Component> Slot<'a, C> {
-    pub fn place<D: Component + 'static>(self, component: D) -> ComponentRef<'a, C, D> {
+    pub fn place<D: Component + 'static>(self, component: D) -> ComponentRef<'a, C> {
         if self.ui.components[self.id].component.is::<D>() {
             unsafe { self.ui.components[self.id].component.downcast_mut_unchecked::<D>() }.reconcile(component);
         } else {
@@ -459,15 +459,15 @@ impl<'a, C: Component> Slot<'a, C> {
     }
 }
 
-pub struct ComponentRef<'a, C: Component, D: Component> {
+pub struct ComponentRef<'a, C: Component> {
     ui: &'a mut UI,
     owner: Id,
     id: Id,
     child_index: usize,
-    phantom_data: PhantomData<(C, D)>,
+    phantom_data: PhantomData<C>,
 }
 
-impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
+impl<'a, C: Component> ComponentRef<'a, C> {
     pub fn child<'b>(&'b mut self) -> Slot<'b, C> {
         let id = if self.child_index == self.ui.components[self.id].children.len() {
             let id = self.ui.component(Box::new(Empty));
@@ -495,7 +495,7 @@ impl<'a, C: Component, D: Component> ComponentRef<'a, C, D> {
     }
 }
 
-impl<'a, C: Component, D: Component> Drop for ComponentRef<'a, C, D> {
+impl<'a, C: Component> Drop for ComponentRef<'a, C> {
     fn drop(&mut self) {
         let remaining: Vec<Id> = self.ui.components[self.id].children.drain(self.child_index..).collect();
         for id in remaining {
