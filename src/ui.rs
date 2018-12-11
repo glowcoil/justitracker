@@ -219,7 +219,9 @@ impl UI {
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
         match event {
             InputEvent::CursorMove(x, y) => {
-                self.input_state.mouse_position = Point::new(x, y);
+                if self.input_state.capture_mouse.is_none() {
+                    self.input_state.mouse_position = Point::new(x, y);
+                }
             }
             InputEvent::MousePress(button) => {
                 match button {
@@ -250,8 +252,6 @@ impl UI {
             _ => {}
         }
 
-        let path = self.trace(self.input_state.mouse_position);
-
         let mut ui_response: UIEventResponse = Default::default();
 
         let response = match event {
@@ -259,6 +259,8 @@ impl UI {
                 if let Some(mouse_focus) = self.input_state.mouse_focus {
                     self.fire_input_event(mouse_focus, event)
                 } else {
+                    let path = self.trace(self.input_state.mouse_position);
+
                     let mut response = None;
                     for component in path.iter().rev() {
                         response = self.fire_input_event(*component, event);
@@ -266,6 +268,9 @@ impl UI {
                             break;
                         }
                     }
+
+                    ui_response.merge(self.mouse_enter_leave(&path));
+
                     response
                 }
             },
@@ -281,8 +286,6 @@ impl UI {
         if let Some(response) = response {
             ui_response.merge(response);
         }
-
-        ui_response.merge(self.mouse_enter_leave(&path));
 
         ui_response.capture_mouse = self.input_state.mouse_focus.is_some();
 
