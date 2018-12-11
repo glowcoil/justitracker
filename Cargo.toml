@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Micah Johnston <micah@glowcoil.com>"]
 
 [dependencies]
-glium = "0.20.0"
+glium = "0.22.0"
 cpal = "0.6.0"
 crossbeam-channel = "*"
 rusttype = "0.2.1"

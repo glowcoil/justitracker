@@ -67,8 +67,8 @@ pub struct Rect {
 
 pub struct Renderer {
     display: glium::Display,
-    width: u32,
-    height: u32,
+    width: f32,
+    height: f32,
     dpi_factor: f32,
 
     rect_program: glium::Program,
@@ -79,7 +79,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(display: glium::Display, width: u32, height: u32, dpi_factor: f32) -> Renderer {
+    pub fn new(display: glium::Display, width: f32, height: f32, dpi_factor: f32) -> Renderer {
         /* initialize rect rendering */
         let rect_program = glium::Program::from_source(&display, include_str!("shader/rect_vert.glsl"), include_str!("shader/rect_frag.glsl"), None).unwrap();
 

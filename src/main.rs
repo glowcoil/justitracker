@@ -63,19 +63,19 @@ impl Default for Song {
 fn main() {
     let mut events_loop = glutin::EventsLoop::new();
     let window = glutin::WindowBuilder::new()
-        .with_dimensions(800, 600)
+        .with_dimensions(glutin::dpi::LogicalSize::new(800.0, 600.0))
         .with_title("justitracker");
     let context = glutin::ContextBuilder::new();
     let display = glium::Display::new(window, context, &events_loop).unwrap();
 
     let (width, height, dpi_factor) = {
         let window = display.gl_window();
-        let (width, height) = window.get_inner_size().unwrap();
-        let dpi_factor = window.hidpi_factor();
-        (width, height, dpi_factor)
+        let size = window.get_inner_size().unwrap();
+        let dpi_factor = window.get_hidpi_factor();
+        (size.width, size.height, dpi_factor)
     };
 
-    let mut renderer = Renderer::new(display, width, height, dpi_factor);
+    let mut renderer = Renderer::new(display, width as f32, height as f32, dpi_factor as f32);
 
     let mut ui = UI::new(width as f32, height as f32);
 
@@ -269,16 +269,16 @@ fn main() {
     events_loop.run_forever(|ev| {
         let input_event = match ev {
             glutin::Event::WindowEvent { event, .. } => match event {
-                glutin::WindowEvent::Closed => {
+                glutin::WindowEvent::CloseRequested => {
                     return glutin::ControlFlow::Break;
                 }
-                glutin::WindowEvent::Resized(w, h) => {
-                    ui.resize(w as f32, h as f32);
+                glutin::WindowEvent::Resized(size) => {
+                    ui.resize(size.width as f32, size.height as f32);
                     renderer.render(ui.display());
                     None
                 }
-                glutin::WindowEvent::CursorMoved { position: (x, y), .. } => {
-                    Some(InputEvent::MouseMove(x as f32, y as f32))
+                glutin::WindowEvent::CursorMoved { position: pos, .. } => {
+                    Some(InputEvent::CursorMove(pos.x as f32, pos.y as f32))
                 }
                 glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
                     ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
@@ -326,32 +326,23 @@ fn main() {
                 }
                 _ => None,
             },
+            glutin::Event::DeviceEvent { event: glutin::DeviceEvent::MouseMotion { delta }, .. } => {
+                Some(InputEvent::MouseMove(delta.0 as f32, delta.1 as f32))
+            },
             _ => None,
         };
 
         if let Some(input_event) = input_event {
             let response = ui.input(input_event);
 
-            if let Some(point) = response.mouse_position {
-                renderer.get_display().gl_window().set_cursor_position(point.x as i32, point.y as i32).expect("could not set cursor state");
-            }
+            renderer.get_display().gl_window().grab_cursor(response.capture_mouse);
 
             if let Some(mouse_cursor) = response.mouse_cursor {
                 renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
             }
 
             if let Some(hidden) = response.hide_cursor {
-                if hidden {
-                    if !cursor_hide {
-                        renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Hide).expect("could not set cursor state");
-                        cursor_hide = true;
-                    }
-                } else {
-                    if cursor_hide {
-                        renderer.get_display().gl_window().set_cursor_state(glutin::CursorState::Normal).expect("could not set cursor state");
-                        cursor_hide = false;
-                    }
-                }
+                renderer.get_display().gl_window().hide_cursor(hidden);
             }
 
             renderer.render(ui.display());
@@ -367,7 +358,6 @@ struct IntegerInput {
     style: TextStyle,
     old: i32,
     delta: f32,
-    drag_origin: (f32, f32),
     dragging: bool,
 }
 
@@ -378,7 +368,6 @@ impl IntegerInput {
             style,
             old: value,
             delta: 0.0,
-            drag_origin: (0.0, 0.0),
             dragging: false,
         }
     }
@@ -387,16 +376,9 @@ impl IntegerInput {
         self.value = value;
     }
 
-    fn start_dragging(&mut self, mouse_position: (f32, f32)) {
-        self.dragging = true;
-        self.old = self.value;
-        self.delta = 0.0;
-        self.drag_origin = mouse_position;
-    }
-
-    fn drag(&mut self, mouse_position: (f32, f32)) -> i32 {
-        self.delta -= (mouse_position.1 - self.drag_origin.1) / 8.0;
-        self.value = (self.old as f32 + self.delta) as i32;
+    fn drag(&mut self, mouse_motion: (f32, f32)) -> i32 {
+        self.delta += mouse_motion.1;
+        self.value = (self.old as f32 - self.delta / 8.0) as i32;
         self.value
     }
 }
@@ -412,16 +394,16 @@ impl Component for IntegerInput {
         text.listen(|ctx, MousePress(button)| {
             ctx.capture_mouse();
             ctx.hide_cursor();
-            let mouse_position = ctx.get_mouse_position();
-            ctx.get_mut().start_dragging(mouse_position);
+
+            let myself = ctx.get_mut();
+            myself.dragging = true;
+            myself.old = myself.value;
+            myself.delta = 0.0;
         });
-        text.listen(|ctx, MouseMove(x, y)| {
+        text.listen(|ctx, MouseMove(dx, dy)| {
             if ctx.get().dragging {
-                let mouse_position = ctx.get_mouse_position();
-                let drag_origin = ctx.get().drag_origin;
-                ctx.set_mouse_position(drag_origin.0, drag_origin.1);
                 let previous = ctx.get().value;
-                let value = ctx.get_mut().drag(mouse_position);
+                let value = ctx.get_mut().drag((dx, dy));
                 if value != previous {
                     ctx.fire(value);
                 }
@@ -430,6 +412,7 @@ impl Component for IntegerInput {
         text.listen(|ctx, MouseRelease(button)| {
             ctx.release_mouse();
             ctx.show_cursor();
+
             ctx.get_mut().dragging = false;
         });
     }

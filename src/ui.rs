@@ -218,7 +218,7 @@ impl UI {
 
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
         match event {
-            InputEvent::MouseMove(x, y) => {
+            InputEvent::CursorMove(x, y) => {
                 self.input_state.mouse_position = Point::new(x, y);
             }
             InputEvent::MousePress(button) => {
@@ -255,7 +255,7 @@ impl UI {
         let mut ui_response: UIEventResponse = Default::default();
 
         let response = match event {
-            InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
+            InputEvent::CursorMove(..) | InputEvent::MouseMove(..) | InputEvent::MousePress(..) | InputEvent::MouseRelease(..) | InputEvent::MouseScroll(..) => {
                 if let Some(mouse_focus) = self.input_state.mouse_focus {
                     self.fire_input_event(mouse_focus, event)
                 } else {
@@ -283,6 +283,8 @@ impl UI {
         }
 
         ui_response.merge(self.mouse_enter_leave(&path));
+
+        ui_response.capture_mouse = self.input_state.mouse_focus.is_some();
 
         ui_response
     }
@@ -339,7 +341,8 @@ impl UI {
 
     fn fire_input_event(&mut self, id: Id, event: InputEvent) -> Option<UIEventResponse> {
         match event {
-            InputEvent::MouseMove(x, y) => self.fire_event(id, MouseMove(x, y)),
+            InputEvent::CursorMove(x, y) => None,
+            InputEvent::MouseMove(dx, dy) => self.fire_event(id, MouseMove(dx, dy)),
             InputEvent::MousePress(button) => self.fire_event(id, MousePress(button)),
             InputEvent::MouseRelease(button) => self.fire_event(id, MouseRelease(button)),
             InputEvent::MouseScroll(delta) => self.fire_event(id, MouseScroll(delta)),
@@ -455,6 +458,7 @@ pub struct Slot<'a, C> {
 impl<'a, C: Component> Slot<'a, C> {
     pub fn place<D: Component + 'static>(self, component: D) -> ComponentRef<'a, C> {
         if self.ui.components[self.id].component.is::<D>() {
+            self.ui.listeners[self.id] = AnyMap::new();
             unsafe { self.ui.components[self.id].component.downcast_mut_unchecked::<D>() }.reconcile(component);
         } else {
             self.ui.cleanup(self.id);
@@ -567,10 +571,6 @@ impl<'a, C: Component> EventContext<'a, C> {
         if self.input_state.mouse_focus == Some(self.origin) {
             self.input_state.mouse_focus = None;
         }
-    }
-
-    pub fn set_mouse_position(&mut self, x: f32, y: f32) {
-        self.response.mouse_position = Some(Point::new(x, y));
     }
 
     pub fn get_mouse_position(&mut self) -> (f32, f32) {
@@ -1121,6 +1121,7 @@ impl Default for InputState {
 
 #[derive(Copy, Clone, Debug)]
 pub enum InputEvent {
+    CursorMove(f32, f32),
     MouseMove(f32, f32),
     MousePress(MouseButton),
     MouseRelease(MouseButton),
@@ -1159,7 +1160,7 @@ pub struct TextInput(pub char);
 
 #[derive(Copy, Clone)]
 pub struct UIEventResponse {
-    pub mouse_position: Option<Point>,
+    pub capture_mouse: bool,
     pub mouse_cursor: Option<MouseCursor>,
     pub hide_cursor: Option<bool>,
 }
@@ -1167,7 +1168,7 @@ pub struct UIEventResponse {
 impl Default for UIEventResponse {
     fn default() -> UIEventResponse {
         UIEventResponse {
-            mouse_position: None,
+            capture_mouse: false,
             mouse_cursor: None,
             hide_cursor: None,
         }
@@ -1176,7 +1177,7 @@ impl Default for UIEventResponse {
 
 impl UIEventResponse {
     fn merge(&mut self, other: UIEventResponse) {
-        self.mouse_position = other.mouse_position.or(self.mouse_position);
+        self.capture_mouse = other.capture_mouse || self.capture_mouse;
         self.mouse_cursor = other.mouse_cursor.or(self.mouse_cursor);
         self.hide_cursor = other.hide_cursor.or(self.hide_cursor);
     }
@@ -1290,6 +1291,7 @@ pub enum KeyboardButton {
     Return,
     Space,
     Compose,
+    Caret,
     Numlock,
     Numpad0,
     Numpad1,
@@ -1314,6 +1316,8 @@ pub enum KeyboardButton {
     Colon,
     Comma,
     Convert,
+    Copy,
+    Cut,
     Decimal,
     Divide,
     Equals,
@@ -1323,7 +1327,6 @@ pub enum KeyboardButton {
     LAlt,
     LBracket,
     LControl,
-    LMenu,
     LShift,
     LWin,
     Mail,
@@ -1341,6 +1344,7 @@ pub enum KeyboardButton {
     NumpadEnter,
     NumpadEquals,
     OEM102,
+    Paste,
     Period,
     PlayPause,
     Power,
@@ -1348,7 +1352,6 @@ pub enum KeyboardButton {
     RAlt,
     RBracket,
     RControl,
-    RMenu,
     RShift,
     RWin,
     Semicolon,
@@ -1445,6 +1448,8 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::Return => KeyboardButton::Return,
             glutin::VirtualKeyCode::Space => KeyboardButton::Space,
             glutin::VirtualKeyCode::Compose => KeyboardButton::Compose,
+            glutin::VirtualKeyCode::Caret => KeyboardButton::Caret,
+            glutin::VirtualKeyCode::Cut => KeyboardButton::Cut,
             glutin::VirtualKeyCode::Numlock => KeyboardButton::Numlock,
             glutin::VirtualKeyCode::Numpad0 => KeyboardButton::Numpad0,
             glutin::VirtualKeyCode::Numpad1 => KeyboardButton::Numpad1,
@@ -1469,6 +1474,7 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::Colon => KeyboardButton::Colon,
             glutin::VirtualKeyCode::Comma => KeyboardButton::Comma,
             glutin::VirtualKeyCode::Convert => KeyboardButton::Convert,
+            glutin::VirtualKeyCode::Copy => KeyboardButton::Copy,
             glutin::VirtualKeyCode::Decimal => KeyboardButton::Decimal,
             glutin::VirtualKeyCode::Divide => KeyboardButton::Divide,
             glutin::VirtualKeyCode::Equals => KeyboardButton::Equals,
@@ -1478,7 +1484,6 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::LAlt => KeyboardButton::LAlt,
             glutin::VirtualKeyCode::LBracket => KeyboardButton::LBracket,
             glutin::VirtualKeyCode::LControl => KeyboardButton::LControl,
-            glutin::VirtualKeyCode::LMenu => KeyboardButton::LMenu,
             glutin::VirtualKeyCode::LShift => KeyboardButton::LShift,
             glutin::VirtualKeyCode::LWin => KeyboardButton::LWin,
             glutin::VirtualKeyCode::Mail => KeyboardButton::Mail,
@@ -1496,6 +1501,7 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::NumpadEnter => KeyboardButton::NumpadEnter,
             glutin::VirtualKeyCode::NumpadEquals => KeyboardButton::NumpadEquals,
             glutin::VirtualKeyCode::OEM102 => KeyboardButton::OEM102,
+            glutin::VirtualKeyCode::Paste => KeyboardButton::Paste,
             glutin::VirtualKeyCode::Period => KeyboardButton::Period,
             glutin::VirtualKeyCode::PlayPause => KeyboardButton::PlayPause,
             glutin::VirtualKeyCode::Power => KeyboardButton::Power,
@@ -1503,7 +1509,6 @@ impl KeyboardButton {
             glutin::VirtualKeyCode::RAlt => KeyboardButton::RAlt,
             glutin::VirtualKeyCode::RBracket => KeyboardButton::RBracket,
             glutin::VirtualKeyCode::RControl => KeyboardButton::RControl,
-            glutin::VirtualKeyCode::RMenu => KeyboardButton::RMenu,
             glutin::VirtualKeyCode::RShift => KeyboardButton::RShift,
             glutin::VirtualKeyCode::RWin => KeyboardButton::RWin,
             glutin::VirtualKeyCode::Semicolon => KeyboardButton::Semicolon,
@@ -1544,7 +1549,6 @@ pub enum MouseCursor {
     Progress,
     NotAllowed,
     ContextMenu,
-    NoneCursor,
     Cell,
     VerticalText,
     Alias,
@@ -1585,7 +1589,6 @@ impl MouseCursor {
             MouseCursor::Progress => glutin::MouseCursor::Progress,
             MouseCursor::NotAllowed => glutin::MouseCursor::NotAllowed,
             MouseCursor::ContextMenu => glutin::MouseCursor::ContextMenu,
-            MouseCursor::NoneCursor => glutin::MouseCursor::NoneCursor,
             MouseCursor::Cell => glutin::MouseCursor::Cell,
             MouseCursor::VerticalText => glutin::MouseCursor::VerticalText,
             MouseCursor::Alias => glutin::MouseCursor::Alias,
