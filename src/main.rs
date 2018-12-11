@@ -265,7 +265,7 @@ fn main() {
 
     renderer.render(ui.display());
 
-    let mut cursor_hide = false;
+    let mut mouse_capture_origin: Option<(f32, f32)> = None;
     events_loop.run_forever(|ev| {
         let input_event = match ev {
             glutin::Event::WindowEvent { event, .. } => match event {
@@ -336,6 +336,10 @@ fn main() {
             let response = ui.input(input_event);
 
             renderer.get_display().gl_window().grab_cursor(response.capture_mouse);
+
+            if let Some(mouse_position) = response.mouse_position {
+                renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64));
+            }
 
             if let Some(mouse_cursor) = response.mouse_cursor {
                 renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));

@@ -565,11 +565,16 @@ impl<'a, C: Component> EventContext<'a, C> {
 
     pub fn capture_mouse(&mut self) {
         self.input_state.mouse_focus = Some(self.origin);
+        self.input_state.capture_mouse = Some(self.input_state.mouse_position);
     }
 
     pub fn release_mouse(&mut self) {
         if self.input_state.mouse_focus == Some(self.origin) {
             self.input_state.mouse_focus = None;
+            if let Some(position) = self.input_state.capture_mouse {
+                self.input_state.capture_mouse = None;
+                self.response.mouse_position = Some((position.x, position.y));
+            }
         }
     }
 
@@ -1103,6 +1108,7 @@ pub struct InputState {
     pub modifiers: KeyboardModifiers,
     focus: Option<Id>,
     mouse_focus: Option<Id>,
+    capture_mouse: Option<Point>,
 }
 
 impl Default for InputState {
@@ -1115,6 +1121,7 @@ impl Default for InputState {
             modifiers: KeyboardModifiers::default(),
             focus: None,
             mouse_focus: None,
+            capture_mouse: None,
         }
     }
 }
@@ -1161,6 +1168,7 @@ pub struct TextInput(pub char);
 #[derive(Copy, Clone)]
 pub struct UIEventResponse {
     pub capture_mouse: bool,
+    pub mouse_position: Option<(f32, f32)>,
     pub mouse_cursor: Option<MouseCursor>,
     pub hide_cursor: Option<bool>,
 }
@@ -1169,6 +1177,7 @@ impl Default for UIEventResponse {
     fn default() -> UIEventResponse {
         UIEventResponse {
             capture_mouse: false,
+            mouse_position: None,
             mouse_cursor: None,
             hide_cursor: None,
         }
@@ -1178,6 +1187,7 @@ impl Default for UIEventResponse {
 impl UIEventResponse {
     fn merge(&mut self, other: UIEventResponse) {
         self.capture_mouse = other.capture_mouse || self.capture_mouse;
+        self.mouse_position = other.mouse_position.or(self.mouse_position);
         self.mouse_cursor = other.mouse_cursor.or(self.mouse_cursor);
         self.hide_cursor = other.hide_cursor.or(self.hide_cursor);
     }
