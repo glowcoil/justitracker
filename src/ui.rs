@@ -186,6 +186,18 @@ impl UI {
 
     fn cleanup(&mut self, id: Id) {
         self.listeners[id] = AnyMap::new();
+        self.under_cursor.remove(&id);
+        if let Some(focus) = self.input_state.focus {
+            if focus == id {
+                self.input_state.focus = None;
+            }
+        }
+        if let Some(mouse_focus) = self.input_state.mouse_focus {
+            if mouse_focus == id {
+                self.input_state.mouse_focus = None;
+            }
+        }
+
         for child in mem::replace(&mut self.components[id].children, Vec::new()) {
             self.cleanup(child);
             self.components.remove(child);
