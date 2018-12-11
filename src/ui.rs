@@ -892,7 +892,7 @@ impl Component for Button {
                 }
             }
         });
-        let mut padding = bg.child().place(Padding::new(10.0));
+        let mut padding = bg.child().place(Padding::new(5.0));
         if let Some(child) = children.get(0) {
             padding.child().place_child(*child);
         }
