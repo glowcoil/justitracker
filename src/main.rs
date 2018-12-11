@@ -16,6 +16,9 @@ extern crate unsafe_any;
 extern crate slab;
 extern crate priority_queue;
 
+use std::time::Duration;
+use std::thread::sleep;
+
 use glium::glutin;
 
 use rusttype::{FontCollection, Font, Scale};
@@ -266,94 +269,108 @@ fn main() {
     renderer.render(ui.display());
 
     let mut mouse_capture_origin: Option<(f32, f32)> = None;
-    events_loop.run_forever(|ev| {
-        let input_event = match ev {
-            glutin::Event::WindowEvent { event, .. } => match event {
-                glutin::WindowEvent::CloseRequested => {
-                    return glutin::ControlFlow::Break;
-                }
-                glutin::WindowEvent::Resized(size) => {
-                    ui.resize(size.width as f32, size.height as f32);
-                    renderer.render(ui.display());
-                    None
-                }
-                glutin::WindowEvent::CursorMoved { position: pos, .. } => {
-                    Some(InputEvent::CursorMove(pos.x as f32, pos.y as f32))
-                }
-                glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
-                    ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
+    loop {
+        let mut event = false;
+        let mut quit = false;
 
-                    let button = match button {
-                        glutin::MouseButton::Left => Some(MouseButton::Left),
-                        glutin::MouseButton::Middle => Some(MouseButton::Middle),
-                        glutin::MouseButton::Right => Some(MouseButton::Right),
-                        _ => None,
-                    };
-
-                    if let Some(button) = button {
-                        match state {
-                            glutin::ElementState::Pressed => {
-                                Some(InputEvent::MousePress(button))
-                            }
-                            glutin::ElementState::Released => {
-                                Some(InputEvent::MouseRelease(button))
-                            }
-                        }
-                    } else {
+        events_loop.poll_events(|ev| {
+            let input_event = match ev {
+                glutin::Event::WindowEvent { event, .. } => match event {
+                    glutin::WindowEvent::CloseRequested => {
+                        quit = true;
+                        return;
+                    }
+                    glutin::WindowEvent::Resized(size) => {
+                        ui.resize(size.width as f32, size.height as f32);
+                        renderer.render(ui.display());
                         None
                     }
-                }
-                glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
-                    ui.modifiers(KeyboardModifiers::from_glutin(input.modifiers));
-
-                    if let Some(keycode) = input.virtual_keycode {
-                        let button = KeyboardButton::from_glutin(keycode);
-
-                        match input.state {
-                            glutin::ElementState::Pressed => {
-                                Some(InputEvent::KeyPress(button))
-                            }
-                            glutin::ElementState::Released => {
-                                Some(InputEvent::KeyRelease(button))
-                            }
-                        }
-                    } else {
-                        None
+                    glutin::WindowEvent::CursorMoved { position: pos, .. } => {
+                        Some(InputEvent::CursorMove(pos.x as f32, pos.y as f32))
                     }
-                }
-                glutin::WindowEvent::ReceivedCharacter(c) => {
-                    Some(InputEvent::TextInput(c))
-                }
+                    glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
+                        ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
+
+                        let button = match button {
+                            glutin::MouseButton::Left => Some(MouseButton::Left),
+                            glutin::MouseButton::Middle => Some(MouseButton::Middle),
+                            glutin::MouseButton::Right => Some(MouseButton::Right),
+                            _ => None,
+                        };
+
+                        if let Some(button) = button {
+                            match state {
+                                glutin::ElementState::Pressed => {
+                                    Some(InputEvent::MousePress(button))
+                                }
+                                glutin::ElementState::Released => {
+                                    Some(InputEvent::MouseRelease(button))
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
+                        ui.modifiers(KeyboardModifiers::from_glutin(input.modifiers));
+
+                        if let Some(keycode) = input.virtual_keycode {
+                            let button = KeyboardButton::from_glutin(keycode);
+
+                            match input.state {
+                                glutin::ElementState::Pressed => {
+                                    Some(InputEvent::KeyPress(button))
+                                }
+                                glutin::ElementState::Released => {
+                                    Some(InputEvent::KeyRelease(button))
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    glutin::WindowEvent::ReceivedCharacter(c) => {
+                        Some(InputEvent::TextInput(c))
+                    }
+                    _ => None,
+                },
+                glutin::Event::DeviceEvent { event: glutin::DeviceEvent::MouseMotion { delta }, .. } => {
+                    Some(InputEvent::MouseMove(delta.0 as f32, delta.1 as f32))
+                },
                 _ => None,
-            },
-            glutin::Event::DeviceEvent { event: glutin::DeviceEvent::MouseMotion { delta }, .. } => {
-                Some(InputEvent::MouseMove(delta.0 as f32, delta.1 as f32))
-            },
-            _ => None,
-        };
+            };
 
-        if let Some(input_event) = input_event {
-            let response = ui.input(input_event);
+            if let Some(input_event) = input_event {
+                event = true;
 
-            renderer.get_display().gl_window().grab_cursor(response.capture_mouse);
+                let response = ui.input(input_event);
 
-            if let Some(mouse_position) = response.mouse_position {
-                renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64));
+                renderer.get_display().gl_window().grab_cursor(response.capture_mouse);
+
+                if let Some(mouse_position) = response.mouse_position {
+                    renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64));
+                }
+
+                if let Some(mouse_cursor) = response.mouse_cursor {
+                    renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
+                }
+
+                if let Some(hidden) = response.hide_cursor {
+                    renderer.get_display().gl_window().hide_cursor(hidden);
+                }
             }
+        });
 
-            if let Some(mouse_cursor) = response.mouse_cursor {
-                renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
-            }
+        if quit {
+            break;
+        }
 
-            if let Some(hidden) = response.hide_cursor {
-                renderer.get_display().gl_window().hide_cursor(hidden);
-            }
-
+        if event {
             renderer.render(ui.display());
         }
 
-        glutin::ControlFlow::Continue
-    });
+        sleep(Duration::from_millis(17));
+    }
 }
 
 
