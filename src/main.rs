@@ -14,7 +14,6 @@ extern crate nfd;
 extern crate anymap;
 extern crate unsafe_any;
 extern crate slab;
-extern crate priority_queue;
 
 use std::time::{Instant, Duration};
 use std::thread::sleep;
@@ -119,7 +118,7 @@ fn main() {
         }
     }
     impl Component for App {
-        fn install(&self, context: &mut InstallContext<App>, children: &[Child]) {
+        fn install(&self, context: &mut InstallContext<App>, _children: &[Child]) {
             let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(19.0) };
 
             let mut root = context.root().place(Col::new(5.0));
@@ -270,10 +269,8 @@ fn main() {
 
     let mut now = Instant::now();
     let mut event = false;
-    let mut mouse_capture_origin: Option<(f32, f32)> = None;
     loop {
         let mut quit = false;
-
 
         events_loop.poll_events(|ev| {
             let input_event = match ev {
@@ -347,10 +344,11 @@ fn main() {
 
                 let response = ui.input(input_event);
 
-                renderer.get_display().gl_window().grab_cursor(response.capture_mouse);
+                renderer.get_display().gl_window().grab_cursor(response.capture_mouse).expect("unable to capture cursor");
 
                 if let Some(mouse_position) = response.mouse_position {
-                    renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64));
+                    renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64))
+                        .expect("unable to set cursor position");
                 }
 
                 if let Some(mouse_cursor) = response.mouse_cursor {
@@ -420,9 +418,9 @@ impl Component for IntegerInput {
         self.style = new.style;
     }
 
-    fn install(&self, context: &mut InstallContext<IntegerInput>, children: &[Child]) {
+    fn install(&self, context: &mut InstallContext<IntegerInput>, _children: &[Child]) {
         let mut text = context.root().place(Text::new(self.value.to_string(), self.style.clone()));
-        text.listen(|ctx, MousePress(button)| {
+        text.listen(|ctx, MousePress(_)| {
             ctx.capture_mouse();
             ctx.hide_cursor();
 
@@ -440,7 +438,7 @@ impl Component for IntegerInput {
                 }
             }
         });
-        text.listen(|ctx, MouseRelease(button)| {
+        text.listen(|ctx, MouseRelease(_)| {
             ctx.release_mouse();
             ctx.show_cursor();
 
@@ -467,7 +465,7 @@ impl NoteElement {
 }
 
 impl Component for NoteElement {
-    fn install(&self, context: &mut InstallContext<NoteElement>, children: &[Child]) {
+    fn install(&self, context: &mut InstallContext<NoteElement>, _children: &[Child]) {
         let mut padding = context.root().place(Padding::new(2.0));
         let mut row = padding.child().place(Row::new(5.0));
 

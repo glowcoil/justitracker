@@ -8,12 +8,8 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::mem;
-use std::ops::{Index, IndexMut};
-use std::slice::IterMut;
 
 use slab::Slab;
-use priority_queue::PriorityQueue;
-use std::cmp::Reverse;
 use anymap::AnyMap;
 
 use glium::glutin;
@@ -27,7 +23,7 @@ pub trait Component: Sized {
     fn reconcile(&mut self, new: Self) {
         *self = new;
     }
-    fn install(&self, context: &mut InstallContext<Self>, children: &[Child]) {}
+    fn install(&self, _context: &mut InstallContext<Self>, _children: &[Child]) {}
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
             child.layout(max_width, max_height)
@@ -344,7 +340,7 @@ impl UI {
 
     fn fire_input_event(&mut self, id: Id, event: InputEvent) -> Option<UIEventResponse> {
         match event {
-            InputEvent::CursorMove(x, y) => None,
+            InputEvent::CursorMove(..) => None,
             InputEvent::MouseMove(dx, dy) => self.fire_event(id, MouseMove(dx, dy)),
             InputEvent::MousePress(button) => self.fire_event(id, MousePress(button)),
             InputEvent::MouseRelease(button) => self.fire_event(id, MouseRelease(button)),
@@ -400,7 +396,7 @@ impl UI {
         if let Redirect::Child(..) = self.components[id].redirect {
             return;
         }
-        let mut component = mem::replace(&mut self.components[id].component, Box::new(Empty));
+        let component = mem::replace(&mut self.components[id].component, Box::new(Empty));
         let children: Vec<Child> = (0..self.components[id].children.len()).map(|i| Child { parent: id, child: i }).collect();
         component.install(self, id, &children);
         self.components[id].component = component;
@@ -546,7 +542,6 @@ impl<'a, C: Component> EventContext<'a, C> {
     }
 
     pub fn fire<E: 'static>(&mut self, event: E) {
-        let id = self.id;
         self.queue.push_back(QueueEntry {
             id: self.id,
             callback: |ui, id, event| {
@@ -838,11 +833,11 @@ impl Text {
 }
 
 impl Component for Text {
-    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
+    fn layout(&self, max_width: f32, _max_height: f32, _children: &mut [LayoutChild]) -> (f32, f32) {
         self.layout_text(max_width)
     }
 
-    fn display(&self, width: f32, height: f32, list: &mut DisplayList) {
+    fn display(&self, _width: f32, _height: f32, list: &mut DisplayList) {
         for glyph in self.glyphs.borrow().iter() {
             let position = glyph.position();
             list.glyph(glyph.clone().into_unpositioned().positioned(point(position.x, position.y)));
@@ -871,7 +866,7 @@ impl Button {
 }
 
 impl Component for Button {
-    fn reconcile(&mut self, new: Button) {}
+    fn reconcile(&mut self, _new: Button) {}
 
     fn install(&self, context: &mut InstallContext<Button>, children: &[Child]) {
         let color = match self.state {
