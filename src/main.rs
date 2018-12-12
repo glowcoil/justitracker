@@ -16,7 +16,7 @@ extern crate unsafe_any;
 extern crate slab;
 extern crate priority_queue;
 
-use std::time::Duration;
+use std::time::{Instant, Duration};
 use std::thread::sleep;
 
 use glium::glutin;
@@ -268,10 +268,12 @@ fn main() {
 
     renderer.render(ui.display());
 
+    let mut now = Instant::now();
+    let mut event = false;
     let mut mouse_capture_origin: Option<(f32, f32)> = None;
     loop {
-        let mut event = false;
         let mut quit = false;
+
 
         events_loop.poll_events(|ev| {
             let input_event = match ev {
@@ -365,11 +367,19 @@ fn main() {
             break;
         }
 
-        if event {
-            renderer.render(ui.display());
-        }
+        let elapsed = now.elapsed();
 
-        sleep(Duration::from_millis(17));
+        if elapsed < Duration::from_millis(17) {
+            sleep(Duration::from_millis(17) - elapsed);
+        } else {
+            if event {
+                renderer.render(ui.display());
+                event = false;
+                now = Instant::now();
+            } else {
+                sleep(Duration::from_millis(17));
+            }
+        }
     }
 }
 
