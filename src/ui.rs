@@ -816,7 +816,7 @@ impl Text {
             last_glyph_id = Some(base_glyph.id());
             let mut glyph = base_glyph.scaled(self.style.scale).positioned(caret);
             if let Some(bb) = glyph.pixel_bounding_box() {
-                if bb.max.x > (max_width) as i32 {
+                if bb.max.x as f32 > max_width {
                     wrapped = true;
                     caret = point(0.0, caret.y + advance_height);
                     glyph = glyph.into_unpositioned().positioned(caret);
