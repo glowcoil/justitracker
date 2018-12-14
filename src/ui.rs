@@ -648,28 +648,28 @@ impl Component for BackgroundColor {
 
 
 pub struct Container {
-    max_width: f32,
-    max_height: f32,
+    width: f32,
+    height: f32,
 }
 
 impl Container {
-    pub fn new(max_width: f32, max_height: f32) -> Container {
-        Container { max_width, max_height }
+    pub fn new(width: f32, height: f32) -> Container {
+        Container { width, height }
     }
 
-    pub fn max_width(&mut self, max_width: f32) {
-        self.max_width = max_width;
+    pub fn width(&mut self, width: f32) {
+        self.width = width;
     }
 
-    pub fn max_height(&mut self, max_height: f32) {
-        self.max_height = max_height;
+    pub fn height(&mut self, height: f32) {
+        self.height = height;
     }
 }
 
 impl Component for Container {
     fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
         if let Some(child) = children.get_mut(0) {
-            child.layout(self.max_width.min(max_width), self.max_height.min(max_height))
+            child.layout(self.width.min(max_width), self.height.min(max_height))
         } else {
             (0.0, 0.0)
         }
