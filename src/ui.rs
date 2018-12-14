@@ -676,6 +676,35 @@ impl Component for Container {
     }
 }
 
+pub struct Expander {
+    width: f32,
+    height: f32,
+}
+
+impl Expander {
+    pub fn new(width: f32, height: f32) -> Expander {
+        Expander { width, height }
+    }
+
+    pub fn unbounded() -> Expander {
+        Expander { width: f32::INFINITY, height: f32::INFINITY }
+    }
+
+    pub fn width(&mut self, width: f32) {
+        self.width = width;
+    }
+
+    pub fn height(&mut self, height: f32) {
+        self.height = height;
+    }
+}
+
+impl Component for Expander {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
+        (self.width.min(max_width), self.height.min(max_height))
+    }
+}
+
 
 pub struct Padding {
     padding: f32,
