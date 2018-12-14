@@ -6,7 +6,7 @@ use std::f32;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::mem;
 
 use slab::Slab;
@@ -75,7 +75,7 @@ pub struct UI {
 
     components: Slab<ComponentData>,
     listeners: Slab<AnyMap>,
-    layout: Layout,
+    layout_root: Id,
 
     under_cursor: HashSet<Id>,
     input_state: InputState,
@@ -87,6 +87,7 @@ struct ComponentData {
     component: Box<ComponentWrapper>,
     redirect: Redirect,
     children: Vec<Id>,
+    layout: Layout,
 }
 
 enum Redirect {
@@ -101,23 +102,22 @@ impl ComponentData {
             component,
             redirect: Redirect::None,
             children: Vec::new(),
+            layout: Layout::new(),
         }
     }
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 struct Layout {
-    id: Id,
-    bounds: BoundingBox,
-    children: Vec<Layout>,
+    bounds: Cell<BoundingBox>,
+    children: Cell<Vec<Id>>,
 }
 
 impl Layout {
-    fn new(id: Id) -> Layout {
+    fn new() -> Layout {
         Layout {
-            id: id,
-            bounds: BoundingBox::new(0.0, 0.0, 0.0, 0.0),
-            children: Vec::new(),
+            bounds: Cell::new(BoundingBox::new(0.0, 0.0, 0.0, 0.0)),
+            children: Cell::new(Vec::new()),
         }
     }
 }
@@ -142,7 +142,7 @@ impl UI {
 
             components: Slab::new(),
             listeners: Slab::new(),
-            layout: Layout::new(0),
+            layout_root: 0,
 
             under_cursor: HashSet::new(),
             input_state: InputState::default(),
@@ -274,7 +274,7 @@ impl UI {
                 if let Some(focus) = self.input_state.focus {
                     self.fire_input_event(focus, event)
                 } else {
-                    let root = self.layout.id;
+                    let root = self.layout_root;
                     self.fire_input_event(root, event)
                 }
             }
@@ -290,19 +290,22 @@ impl UI {
 
     fn trace(&self, mouse_position: Point) -> Vec<Id> {
         let mut under_cursor = Vec::new();
-        self.trace_inner(mouse_position, &self.layout, &mut under_cursor);
+        self.trace_inner(mouse_position, self.layout_root, &mut under_cursor);
         under_cursor
     }
 
-    fn trace_inner(&self, mouse_position: Point, layout: &Layout, under_cursor: &mut Vec<Id>) -> bool {
-        if layout.bounds.contains_point(mouse_position) {
-            under_cursor.push(layout.id);
-            let mouse_adjusted = mouse_position - layout.bounds.pos;
-            for child in layout.children.iter() {
+    fn trace_inner(&self, mouse_position: Point, id: Id, under_cursor: &mut Vec<Id>) -> bool {
+        let bounds = self.components[id].layout.bounds.get();
+        if bounds.contains_point(mouse_position) {
+            under_cursor.push(id);
+            let mouse_adjusted = mouse_position - bounds.pos;
+            let children = self.components[id].layout.children.replace(Vec::new());
+            for &child in children.iter() {
                 if self.trace_inner(mouse_adjusted, child, under_cursor) {
                     return true;
                 }
             }
+            self.components[id].layout.children.set(children);
         }
         false
     }
@@ -363,24 +366,27 @@ impl UI {
         self.update();
         self.layout();
         let mut list = DisplayList::new();
-        self.display_component(&self.layout, &mut list);
+        self.display_component(self.layout_root, &mut list);
         list
     }
 
-    fn display_component(&self, layout: &Layout, list: &mut DisplayList) {
-        list.push_translate(layout.bounds.pos);
-        self.components[layout.id].component.display(layout.bounds.size.x, layout.bounds.size.y, list);
-        for child in layout.children.iter() {
+    fn display_component(&self, id: Id, list: &mut DisplayList) {
+        let bounds = self.components[id].layout.bounds.get();
+        let children = self.components[id].layout.children.replace(Vec::new());
+        list.push_translate(bounds.pos);
+        self.components[id].component.display(bounds.size.x, bounds.size.y, list);
+        for &child in children.iter() {
             self.display_component(child, list);
         }
+        self.components[id].layout.children.set(children);
         list.pop_translate();
     }
 
     /* layout */
 
     fn layout(&mut self) {
-        self.layout = Layout::new(find_leaf(&self.components, 0));
-        LayoutChild { components: &self.components, layout: &mut self.layout }
+        self.layout_root = find_leaf(&self.components, 0);
+        LayoutChild { components: &self.components, id: self.layout_root }
             .layout(self.width, self.height);
         // println!("{:#?}", &self.layout);
     }
@@ -601,22 +607,30 @@ impl<'a, C: Component> EventContext<'a, C> {
 
 pub struct LayoutChild<'a> {
     components: &'a Slab<ComponentData>,
-    layout: &'a mut Layout,
+    id: Id,
 }
 
 impl<'a> LayoutChild<'a> {
     pub fn layout(&mut self, max_width: f32, max_height: f32) -> (f32, f32) {
-        self.layout.children = self.components[self.layout.id].children.iter()
-            .map(|id| Layout::new(find_leaf(self.components, *id))).collect();
-        let components = &self.components;
-        let mut children: Vec<LayoutChild> = self.layout.children.iter_mut().map(|layout| LayoutChild { components, layout }).collect();
-        let (width, height) = self.components[self.layout.id].component.layout(max_width, max_height, &mut children);
-        self.layout.bounds.size = Point::new(width, height);
+        let children: Vec<Id> = self.components[self.id].children.iter()
+            .map(|id| find_leaf(self.components, *id)).collect();
+        for &child in children.iter() {
+            self.components[child].layout.bounds.set(BoundingBox::new(0.0, 0.0, 0.0, 0.0));
+        }
+        let mut layout_children: Vec<LayoutChild> = children.iter()
+            .map(|id| LayoutChild { components: self.components, id: *id }).collect();
+        self.components[self.id].layout.children.set(children);
+        let (width, height) = self.components[self.id].component.layout(max_width, max_height, &mut layout_children);
+        let mut bounds = self.components[self.id].layout.bounds.get();
+        bounds.size = Point::new(width, height);
+        self.components[self.id].layout.bounds.set(bounds);
         (width, height)
     }
 
     pub fn offset(&mut self, x: f32, y: f32) {
-        self.layout.bounds.pos = Point::new(x, y);
+        let mut bounds = self.components[self.id].layout.bounds.get();
+        bounds.pos = Point::new(x, y);
+        self.components[self.id].layout.bounds.set(bounds);
     }
 }
 
