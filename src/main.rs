@@ -314,6 +314,14 @@ fn main() {
                         None
                     }
                 }
+                glutin::WindowEvent::MouseWheel { delta, modifiers, .. } => {
+                    ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
+
+                    match delta {
+                        glutin::MouseScrollDelta::LineDelta(x, y) => { Some(InputEvent::MouseScroll(x, y)) }
+                        glutin::MouseScrollDelta::PixelDelta(glutin::dpi::LogicalPosition { x, y }) => { Some(InputEvent::MouseScroll(x as f32, y as f32)) }
+                    }
+                }
                 glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
                     ui.modifiers(KeyboardModifiers::from_glutin(input.modifiers));
 

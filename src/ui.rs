@@ -344,7 +344,7 @@ impl UI {
             InputEvent::MouseMove(dx, dy) => self.fire_event(id, MouseMove(dx, dy)),
             InputEvent::MousePress(button) => self.fire_event(id, MousePress(button)),
             InputEvent::MouseRelease(button) => self.fire_event(id, MouseRelease(button)),
-            InputEvent::MouseScroll(delta) => self.fire_event(id, MouseScroll(delta)),
+            InputEvent::MouseScroll(dx, dy) => self.fire_event(id, MouseScroll(dx, dy)),
             InputEvent::KeyPress(button) => self.fire_event(id, KeyPress(button)),
             InputEvent::KeyRelease(button) => self.fire_event(id, KeyRelease(button)),
             InputEvent::TextInput(c) => self.fire_event(id, TextInput(c)),
@@ -1130,7 +1130,7 @@ pub enum InputEvent {
     MouseMove(f32, f32),
     MousePress(MouseButton),
     MouseRelease(MouseButton),
-    MouseScroll(f32),
+    MouseScroll(f32, f32),
     KeyPress(KeyboardButton),
     KeyRelease(KeyboardButton),
     TextInput(char),
@@ -1152,7 +1152,7 @@ pub struct MousePress(pub MouseButton);
 pub struct MouseRelease(pub MouseButton);
 
 #[derive(Copy, Clone, Debug)]
-pub struct MouseScroll(pub f32);
+pub struct MouseScroll(pub f32, pub f32);
 
 #[derive(Copy, Clone, Debug)]
 pub struct KeyPress(pub KeyboardButton);
