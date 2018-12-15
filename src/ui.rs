@@ -215,7 +215,7 @@ impl UI {
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
         match event {
             InputEvent::CursorMove(x, y) => {
-                if self.input_state.capture_mouse.is_none() {
+                if self.input_state.capture_cursor.is_none() {
                     self.input_state.mouse_position = Point::new(x, y);
                 }
             }
@@ -283,7 +283,7 @@ impl UI {
             ui_response.merge(response);
         }
 
-        ui_response.capture_mouse = self.input_state.mouse_focus.is_some();
+        ui_response.capture_cursor = self.input_state.capture_cursor.is_some();
 
         ui_response
     }
@@ -578,18 +578,28 @@ impl<'a, C: Component> EventContext<'a, C> {
         }
     }
 
-    pub fn capture_mouse(&mut self) {
+    pub fn capture_mouse_focus(&mut self) {
         self.input_state.mouse_focus = Some(self.origin);
-        self.input_state.capture_mouse = Some(self.input_state.mouse_position);
     }
 
-    pub fn release_mouse(&mut self) {
+    pub fn release_mouse_focus(&mut self) {
         if self.input_state.mouse_focus == Some(self.origin) {
             self.input_state.mouse_focus = None;
-            if let Some(position) = self.input_state.capture_mouse {
-                self.input_state.capture_mouse = None;
-                self.response.mouse_position = Some((position.x, position.y));
-            }
+        }
+    }
+
+    pub fn capture_cursor(&mut self) {
+        self.capture_mouse_focus();
+        self.hide_cursor();
+        self.input_state.capture_cursor = Some(self.input_state.mouse_position);
+    }
+
+    pub fn release_cursor(&mut self) {
+        self.release_mouse_focus();
+        self.show_cursor();
+        if let Some(position) = self.input_state.capture_cursor {
+            self.input_state.capture_cursor = None;
+            self.response.mouse_position = Some((position.x, position.y));
         }
     }
 
@@ -1166,7 +1176,7 @@ pub struct InputState {
     pub modifiers: KeyboardModifiers,
     focus: Option<Id>,
     mouse_focus: Option<Id>,
-    capture_mouse: Option<Point>,
+    capture_cursor: Option<Point>,
 }
 
 impl Default for InputState {
@@ -1179,7 +1189,7 @@ impl Default for InputState {
             modifiers: KeyboardModifiers::default(),
             focus: None,
             mouse_focus: None,
-            capture_mouse: None,
+            capture_cursor: None,
         }
     }
 }
@@ -1225,7 +1235,7 @@ pub struct TextInput(pub char);
 
 #[derive(Copy, Clone)]
 pub struct UIEventResponse {
-    pub capture_mouse: bool,
+    pub capture_cursor: bool,
     pub mouse_position: Option<(f32, f32)>,
     pub mouse_cursor: Option<MouseCursor>,
     pub hide_cursor: Option<bool>,
@@ -1234,7 +1244,7 @@ pub struct UIEventResponse {
 impl Default for UIEventResponse {
     fn default() -> UIEventResponse {
         UIEventResponse {
-            capture_mouse: false,
+            capture_cursor: false,
             mouse_position: None,
             mouse_cursor: None,
             hide_cursor: None,
@@ -1244,7 +1254,7 @@ impl Default for UIEventResponse {
 
 impl UIEventResponse {
     fn merge(&mut self, other: UIEventResponse) {
-        self.capture_mouse = other.capture_mouse || self.capture_mouse;
+        self.capture_cursor = other.capture_cursor || self.capture_cursor;
         self.mouse_position = other.mouse_position.or(self.mouse_position);
         self.mouse_cursor = other.mouse_cursor.or(self.mouse_cursor);
         self.hide_cursor = other.hide_cursor.or(self.hide_cursor);

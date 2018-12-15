@@ -357,7 +357,7 @@ fn main() {
 
             let response = ui.input(input_event);
 
-            renderer.get_display().gl_window().grab_cursor(response.capture_mouse).expect("unable to capture cursor");
+            renderer.get_display().gl_window().grab_cursor(response.capture_cursor).expect("unable to capture cursor");
 
             if let Some(mouse_position) = response.mouse_position {
                 renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64))
@@ -425,8 +425,7 @@ impl Component for IntegerInput {
     fn install(&self, context: &mut InstallContext<IntegerInput>, _children: &[Child]) {
         let mut text = context.root().place(Text::new(self.value.to_string(), self.style.clone()));
         text.listen(|ctx, MousePress(_)| {
-            ctx.capture_mouse();
-            ctx.hide_cursor();
+            ctx.capture_cursor();
 
             let myself = ctx.get_mut();
             myself.dragging = true;
@@ -443,8 +442,7 @@ impl Component for IntegerInput {
             }
         });
         text.listen(|ctx, MouseRelease(_)| {
-            ctx.release_mouse();
-            ctx.show_cursor();
+            ctx.release_cursor();
 
             ctx.get_mut().dragging = false;
         });
