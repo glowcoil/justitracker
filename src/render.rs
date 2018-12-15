@@ -196,6 +196,11 @@ impl Renderer {
         }
     }
 
+    pub fn resize(&mut self, width: f32, height: f32) {
+        self.width = width;
+        self.height = height;
+    }
+
     pub fn render(&mut self, display_list: DisplayList) {
         let mut target = self.display.draw();
         target.clear_color(0.01, 0.015, 0.02, 1.0);

@@ -285,6 +285,7 @@ fn main() {
                 }
                 glutin::WindowEvent::Resized(size) => {
                     ui.resize(size.width as f32, size.height as f32);
+                    renderer.resize(size.width as f32, size.height as f32);
                     renderer.render(ui.display());
                     None
                 }
