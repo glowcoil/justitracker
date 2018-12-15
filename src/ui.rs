@@ -1736,4 +1736,23 @@ impl BoundingBox {
     pub fn contains_point(&self, point: Point) -> bool {
         point.x > self.pos.x && point.x < self.pos.x + self.size.x && point.y > self.pos.y && point.y < self.pos.y + self.size.y
     }
+
+    pub fn overlaps(&self, other: &BoundingBox) -> Overlap {
+        if (self.pos.x + self.size.x < other.pos.x || other.pos.x + other.size.x < self.pos.x) ||
+           (self.pos.y + self.size.y < other.pos.y || other.pos.y + other.size.y < self.pos.y) {
+            Overlap::Outside
+        } else if (other.pos.x <= self.pos.x && self.pos.x + self.size.x < other.pos.x + other.size.x) &&
+                  (other.pos.y <= self.pos.y && self.pos.y + self.size.y < other.pos.y + other.size.y) {
+            Overlap::Inside
+        } else {
+            Overlap::Overlap
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Overlap {
+    Inside,
+    Overlap,
+    Outside,
 }

@@ -9,20 +9,37 @@ use rusttype::gpu_cache::Cache;
 use glium;
 use glium::Surface;
 
-use ui::{Point, BoundingBox};
+use ui::{Point, BoundingBox, Overlap};
 
-pub struct DisplayList {
+struct DisplayListItems {
     rects: Vec<Rect>,
     glyphs: Vec<PositionedGlyph<'static>>,
+}
+
+impl DisplayListItems {
+    fn new() -> DisplayListItems {
+        DisplayListItems {
+            rects: Vec::new(),
+            glyphs: Vec::new(),
+        }
+    }
+}
+
+pub struct DisplayList {
+    items: DisplayListItems,
+    clip_rects: Vec<(BoundingBox, DisplayListItems)>,
     translate_stack: Vec<Point>,
+    clip_rect_stack: Vec<(usize, BoundingBox)>,
+    context_stack: Vec<DisplayListContext>,
 }
 
 impl DisplayList {
     pub fn new() -> DisplayList {
         DisplayList {
-            rects: vec![],
-            glyphs: vec![],
+            items: DisplayListItems::new(),
+            clip_rects: Vec::new(),
             translate_stack: vec![],
+            clip_rect_stack: Vec::new(),
         }
     }
 
@@ -38,13 +55,42 @@ impl DisplayList {
         self.translate_stack.pop();
     }
 
+    pub fn push_clip_rect(&mut self, clip_rect: BoundingBox) {
+        let mut clip_rect = clip_rect;
+        if let Some(top_delta) = self.translate_stack.last() {
+            clip_rect.pos += *top_delta;
+        }
+        if let Some((_, top_rect)) = self.clip_rect_stack.last() {
+            clip_rect.pos.x = clip_rect.pos.x.max(top_rect.pos.x);
+            clip_rect.pos.y = clip_rect.pos.y.max(top_rect.pos.y);
+            clip_rect.size.x = clip_rect.size.x.min(top_rect.size.x);
+            clip_rect.size.y = clip_rect.size.y.min(top_rect.size.y);
+        }
+        self.clip_rect_stack.push((self.clip_rects.len(), clip_rect));
+        self.clip_rects.push((clip_rect, DisplayListItems::new()));
+    }
+
+    pub fn pop_clip_rect(&mut self) {
+        self.clip_rect_stack.pop();
+    }
+
     pub fn rect(&mut self, rect: Rect) {
         let mut rect = rect;
         if let Some(delta) = self.translate_stack.last() {
             rect.bounds.pos.x += delta.x;
             rect.bounds.pos.y += delta.y;
         }
-        self.rects.push(rect);
+        if let Some((i, clip_rect)) = self.clip_rect_stack.last() {
+            // match rect.bounds.overlaps(clip_rect) {
+            //     Overlap::Inside => { self.items.rects.push(rect); }
+            //     Overlap::Overlap => {
+                    self.clip_rects[*i].1.rects.push(rect);
+            //     }
+            //     Overlap::Outside => { /* don't draw */ }
+            // }
+        } else {
+            self.items.rects.push(rect);
+        }
     }
 
     pub fn glyph(&mut self, glyph: PositionedGlyph<'static>) {
@@ -53,7 +99,20 @@ impl DisplayList {
             let position = glyph.position();
             glyph = glyph.into_unpositioned().positioned(point(position.x + delta.x, position.y + delta.y));
         }
-        self.glyphs.push(glyph);
+        if let Some((i, clip_rect)) = self.clip_rect_stack.last() {
+            // if let Some(bbox) = glyph.pixel_bounding_box() {
+            //     let bounds = BoundingBox::new(bbox.min.x as f32, bbox.min.y as f32, bbox.max.x as f32, bbox.max.y as f32);
+            //     match bounds.overlaps(clip_rect) {
+            //         Overlap::Inside => { self.items.glyphs.push(glyph); }
+            //         Overlap::Overlap => { self.clip_rects[*i].1.glyphs.push(glyph); }
+            //         Overlap::Outside => { /* don't draw */ }
+            //     }
+            // } else {
+                self.clip_rects[*i].1.glyphs.push(glyph);
+            // }
+        } else {
+            self.items.glyphs.push(glyph);
+        }
     }
 }
 
@@ -120,13 +179,17 @@ impl Renderer {
         let mut target = self.display.draw();
         target.clear_color(0.01, 0.015, 0.02, 1.0);
 
-        self.render_rects(&mut target, display_list.rects);
-        self.render_glyphs(&mut target, display_list.glyphs);
+        self.render_rects(&mut target, &display_list.items.rects, None);
+        self.render_glyphs(&mut target, &display_list.items.glyphs, None);
+        for (scissor, items) in display_list.clip_rects.iter() {
+            self.render_rects(&mut target, &items.rects, Some(*scissor));
+            self.render_glyphs(&mut target, &items.glyphs, Some(*scissor));
+        }
 
         target.finish().unwrap();
     }
 
-    fn render_rects(&self, target: &mut glium::Frame, rects: Vec<Rect>) {
+    fn render_rects(&self, target: &mut glium::Frame, rects: &[Rect], scissor: Option<BoundingBox>) {
         #[derive(Copy, Clone)]
         struct Vertex {
             position: [f32; 2],
@@ -157,12 +220,13 @@ impl Renderer {
             &glium::uniforms::EmptyUniforms,
             &glium::DrawParameters {
                 blend: glium::Blend::alpha_blending(),
+                scissor: scissor.map(|bounds| glium::Rect { left: bounds.pos.x as u32, bottom: (self.height - bounds.pos.y - bounds.size.y) as u32, width: bounds.size.x as u32, height: bounds.size.y as u32 }),
                 ..Default::default()
             }).unwrap();
     }
 
-    fn render_glyphs<'a>(&mut self, target: &mut glium::Frame, glyphs: Vec<PositionedGlyph<'a>>) {
-        for glyph in &glyphs {
+    fn render_glyphs<'a>(&mut self, target: &mut glium::Frame, glyphs: &[PositionedGlyph<'a>], scissor: Option<BoundingBox>) {
+        for glyph in glyphs {
             self.cache.queue_glyph(0, glyph.clone());
         }
         {
@@ -256,6 +320,7 @@ impl Renderer {
             &self.text_program, &uniforms,
             &glium::DrawParameters {
                 blend: glium::Blend::alpha_blending(),
+                scissor: scissor.map(|bounds| glium::Rect { left: bounds.pos.x as u32, bottom: (self.height - bounds.pos.y - bounds.size.y) as u32, width: bounds.size.x as u32, height: bounds.size.y as u32 }),
                 ..Default::default()
             }).unwrap();
     }
