@@ -963,6 +963,111 @@ impl Component for Button {
 }
 
 
+pub struct Scrollbox {
+    position: f32,
+    hover: bool,
+    hold: bool,
+}
+
+impl Scrollbox {
+    pub fn new() -> Scrollbox {
+        Scrollbox {
+            position: 0.0,
+            hover: false,
+            hold: false,
+        }
+    }
+}
+
+impl Component for Scrollbox {
+    fn reconcile(&mut self, _new: Scrollbox) {}
+
+    fn install(&self, context: &mut InstallContext<Scrollbox>, children: &[Child]) {
+        let (child_width, child_height) = if let Some(child) = children.get(0) {
+            let size = context.layout(*child, f32::INFINITY, f32::INFINITY);
+            context.offset(*child, 0.0, -self.position);
+            size
+        } else {
+            (0.0, 0.0)
+        };
+
+        let mut inner = context.root().place(ScrollboxInner { position: self.position, height: child_height });
+        inner.listen(move |ctx, MouseScroll(_dx, dy)| {
+            let (_width, height) = ctx.get_size();
+            ctx.get_mut().position = (ctx.get().position - dy).min(child_height - height).max(0.0);
+        });
+
+        {
+            let mut track = inner.child().place(BackgroundColor::new([0.10, 0.13, 0.18, 1.0]));
+            track.child().place(Expander::unbounded());
+        }
+        {
+            let color = if self.hover {
+                [0.3, 0.4, 0.5, 1.0]
+            } else {
+                [0.15, 0.18, 0.23, 1.0]
+            };
+
+            let mut bar = inner.child().place(BackgroundColor::new(color));
+            bar.listen(|ctx, MouseEnter| {
+                ctx.get_mut().hover = true;
+            });
+            bar.listen(|ctx, MouseLeave| {
+                ctx.get_mut().hover = false;
+                ctx.get_mut().hold = false;
+            });
+            bar.listen(|ctx, MousePress(button)| {
+                if button == MouseButton::Left {
+                    ctx.get_mut().hold = true;
+                }
+            });
+            bar.listen(move |ctx, MouseMove(dx, dy)| {
+                let (_width, height) = ctx.get_size();
+                if ctx.get().hold {
+                    ctx.get_mut().position = (ctx.get().position + dy / height * child_height).min(child_height - height).max(0.0);
+                }
+            });
+            bar.listen(|ctx, MouseRelease(button)| {
+                if button == MouseButton::Left {
+                    ctx.get_mut().hold = false;
+                }
+            });
+            bar.child().place(Expander::unbounded());
+        }
+
+        if let Some(child) = children.get(0) {
+            inner.child().place_child(*child);
+        } else {
+            inner.child().place(Empty);
+        }
+    }
+}
+
+struct ScrollboxInner {
+    position: f32,
+    height: f32,
+}
+
+impl Component for ScrollboxInner {
+    fn layout(&self, max_width: f32, max_height: f32, children: &mut [LayoutChild]) -> (f32, f32) {
+        children[2].layout(f32::INFINITY, f32::INFINITY);
+        children[2].offset(0.0, -self.position);
+
+        children[0].layout(16.0, max_height);
+        children[0].offset(max_width - 16.0, 0.0);
+
+        children[1].layout(16.0, (max_height / self.height).min(1.0) * max_height);
+        children[1].offset(max_width - 16.0, self.position / self.height * max_height);
+
+        (max_width, max_height)
+    }
+
+    fn display(&self, width: f32, height: f32, list: &mut DisplayList) {
+        list.push_clip_rect(BoundingBox::new(0.0, 0.0, width, height));
+    }
+}
+
+
 // pub struct Stack;
 
 // impl Stack {

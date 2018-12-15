@@ -121,7 +121,8 @@ fn main() {
         fn install(&self, context: &mut InstallContext<App>, _children: &[Child]) {
             let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(19.0) };
 
-            let mut root = context.root().place(Col::new(5.0));
+            let mut row = context.root().place(Row::new(0.0));
+            let mut root = row.child().place(Col::new(5.0));
 
             {
                 let mut controls = root.child().place(Row::new(5.0));
@@ -163,7 +164,10 @@ fn main() {
             }
 
             {
-                let mut notes = root.child().place(Row::new(5.0));
+                let mut container = root.child().place(Container::new(100.0, 100.0));
+                let mut scrollbox = container.child().place(Scrollbox::new());
+
+                let mut notes = scrollbox.child().place(Row::new(5.0));
                 for i in 0..self.song.notes.len() {
                     let mut col = notes.child().place(Col::new(5.0));
 
@@ -216,6 +220,8 @@ fn main() {
                     }
                 }
             }
+
+            root.child().place(Text::new("test".to_string(), style.clone()));
 
             root.listen(|ctx, KeyPress(button)| {
                 match button {
