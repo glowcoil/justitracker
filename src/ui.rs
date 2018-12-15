@@ -373,13 +373,14 @@ impl UI {
     fn display_component(&self, id: Id, list: &mut DisplayList) {
         let bounds = self.components[id].layout.bounds.get();
         let children = self.components[id].layout.children.replace(Vec::new());
+        list.push_context();
         list.push_translate(bounds.pos);
         self.components[id].component.display(bounds.size.x, bounds.size.y, list);
         for &child in children.iter() {
             self.display_component(child, list);
         }
         self.components[id].layout.children.set(children);
-        list.pop_translate();
+        list.pop_context();
     }
 
     /* layout */

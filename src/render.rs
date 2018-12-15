@@ -25,6 +25,11 @@ impl DisplayListItems {
     }
 }
 
+struct DisplayListContext {
+    translate_stack_len: usize,
+    clip_rect_stack_len: usize,
+}
+
 pub struct DisplayList {
     items: DisplayListItems,
     clip_rects: Vec<(BoundingBox, DisplayListItems)>,
@@ -40,6 +45,7 @@ impl DisplayList {
             clip_rects: Vec::new(),
             translate_stack: vec![],
             clip_rect_stack: Vec::new(),
+            context_stack: Vec::new(),
         }
     }
 
@@ -72,6 +78,21 @@ impl DisplayList {
 
     pub fn pop_clip_rect(&mut self) {
         self.clip_rect_stack.pop();
+    }
+
+    pub fn push_context(&mut self) {
+        let context = DisplayListContext {
+            translate_stack_len: self.translate_stack.len(),
+            clip_rect_stack_len: self.clip_rect_stack.len(),
+        };
+        self.context_stack.push(context);
+    }
+
+    pub fn pop_context(&mut self) {
+        if let Some(context) = self.context_stack.pop() {
+            self.translate_stack.truncate(context.translate_stack_len);
+            self.clip_rect_stack.truncate(context.clip_rect_stack_len);
+        }
     }
 
     pub fn rect(&mut self, rect: Rect) {
