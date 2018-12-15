@@ -163,7 +163,9 @@ fn main() {
             }
 
             {
-                let mut notes = root.child().place(Row::new(5.0));
+                let mut scrollbox = root.child().place(Scrollbox::new());
+
+                let mut notes = scrollbox.child().place(Row::new(5.0));
                 for i in 0..self.song.notes.len() {
                     let mut col = notes.child().place(Col::new(5.0));
 
@@ -319,7 +321,7 @@ fn main() {
                     ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
 
                     match delta {
-                        glutin::MouseScrollDelta::LineDelta(x, y) => { Some(InputEvent::MouseScroll(x, y)) }
+                        glutin::MouseScrollDelta::LineDelta(x, y) => { Some(InputEvent::MouseScroll(x * 48.0, y * 48.0)) }
                         glutin::MouseScrollDelta::PixelDelta(glutin::dpi::LogicalPosition { x, y }) => { Some(InputEvent::MouseScroll(x as f32, y as f32)) }
                     }
                 }
