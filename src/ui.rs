@@ -656,7 +656,7 @@ impl BackgroundColor {
 
 impl Component for BackgroundColor {
     fn display(&self, width: f32, height: f32, list: &mut DisplayList) {
-        list.rect(Rect { x: 0.0, y: 0.0, w: width, h: height, color: self.color });
+        list.rect(Rect { bounds: BoundingBox::new(0.0, 0.0, width, height), color: self.color });
     }
 }
 

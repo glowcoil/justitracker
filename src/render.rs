@@ -9,7 +9,7 @@ use rusttype::gpu_cache::Cache;
 use glium;
 use glium::Surface;
 
-use ui::Point;
+use ui::{Point, BoundingBox};
 
 pub struct DisplayList {
     rects: Vec<Rect>,
@@ -41,8 +41,8 @@ impl DisplayList {
     pub fn rect(&mut self, rect: Rect) {
         let mut rect = rect;
         if let Some(delta) = self.translate_stack.last() {
-            rect.x += delta.x;
-            rect.y += delta.y;
+            rect.bounds.pos.x += delta.x;
+            rect.bounds.pos.y += delta.y;
         }
         self.rects.push(rect);
     }
@@ -58,10 +58,7 @@ impl DisplayList {
 }
 
 pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+    pub bounds: BoundingBox,
     pub color: [f32; 4],
 }
 
@@ -138,8 +135,8 @@ impl Renderer {
         implement_vertex!(Vertex, position, color);
 
         let vertices: Vec<Vertex> = rects.iter().flat_map(|r| {
-            let (x1, y1) = self.pixel_to_ndc(r.x, r.y);
-            let (x2, y2) = self.pixel_to_ndc(r.x + r.w, r.y + r.h);
+            let (x1, y1) = self.pixel_to_ndc(r.bounds.pos.x, r.bounds.pos.y);
+            let (x2, y2) = self.pixel_to_ndc(r.bounds.pos.x + r.bounds.size.x, r.bounds.pos.y + r.bounds.size.y);
 
             arrayvec::ArrayVec::<[Vertex; 6]>::from([
                 Vertex { position: [x1, y1], color: r.color },
