@@ -403,13 +403,13 @@ impl UI {
         if let Redirect::Child(..) = self.components[id].redirect {
             return;
         }
+        for child in self.components[id].children.clone() {
+            self.update_component(child);
+        }
         let component = mem::replace(&mut self.components[id].component, Box::new(Empty));
         let children: Vec<Child> = (0..self.components[id].children.len()).map(|i| Child { parent: id, child: i }).collect();
         component.install(self, id, &children);
         self.components[id].component = component;
-        for child in self.components[id].children.clone() {
-            self.update_component(child);
-        }
         if let Redirect::Inner(inner) = self.components[id].redirect {
             self.update_component(inner);
         }
@@ -445,6 +445,16 @@ impl<'a, C: Component> InstallContext<'a, C> {
             self.ui.components[self.id].redirect = Redirect::Inner(inner);
             Slot { ui: self.ui, owner: self.id, id: inner, phantom_data: PhantomData }
         }
+    }
+
+    pub fn layout(&mut self, child: Child, max_width: f32, max_height: f32) -> (f32, f32) {
+        LayoutChild { components: &self.ui.components, id: self.ui.components[child.parent].children[child.child] }
+            .layout(max_width, max_height)
+    }
+
+    pub fn offset(&mut self, child: Child, x: f32, y: f32) {
+        LayoutChild { components: &self.ui.components, id: self.ui.components[child.parent].children[child.child] }
+            .offset(x, y)
     }
 }
 
@@ -601,6 +611,12 @@ impl<'a, C: Component> EventContext<'a, C> {
 
     pub fn get_input_state(&self) -> &InputState {
         &self.input_state
+    }
+
+    pub fn get_size(&self) -> (f32, f32) {
+        let leaf = find_leaf(&self.components, self.id);
+        let size = self.components[leaf].layout.bounds.get().size;
+        (size.x, size.y)
     }
 }
 
