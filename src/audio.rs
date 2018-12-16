@@ -53,6 +53,7 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                     }
                     AudioMessage::Song(s) => {
                         song = s;
+                        note %= song.ptn_len;
                     }
                 }
             }
