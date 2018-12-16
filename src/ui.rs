@@ -213,12 +213,27 @@ impl UI {
     }
 
     pub fn input(&mut self, event: InputEvent) -> UIEventResponse {
+        /* only send cursor positions when not captured; only send raw mouse motion when captured */
+        let mut event = event;
         match event {
             InputEvent::CursorMove(x, y) => {
-                if self.input_state.capture_cursor.is_none() {
+                if self.input_state.capture_cursor.is_some() {
+                    return UIEventResponse::default();
+                } else {
+                    event = InputEvent::MouseMove(x - self.input_state.mouse_position.x, y - self.input_state.mouse_position.y);
                     self.input_state.mouse_position = Point::new(x, y);
                 }
             }
+            InputEvent::MouseMove(..) => {
+                if self.input_state.capture_cursor.is_none() {
+                    return UIEventResponse::default();
+                }
+            }
+            _ => {}
+        }
+
+        /* update keyboard state */
+        match event {
             InputEvent::MousePress(button) => {
                 match button {
                     MouseButton::Left => {
