@@ -214,16 +214,20 @@ struct App {
     filename: Option<String>,
     song: Song,
     audio_send: mpsc::Sender<AudioMessage>,
+    sample_rate: u32,
     cursor: (usize, usize),
     font: Rc<Font<'static>>,
 }
 
 impl App {
     fn new() -> App {
+        let (sample_rate, audio_send) = start_audio_thread();
+
         App {
             filename: None,
             song: Song::default(),
-            audio_send: start_audio_thread(),
+            sample_rate: sample_rate,
+            audio_send: audio_send,
             cursor: (0, 0),
             font: Rc::new(FontCollection::from_bytes(include_bytes!("../sawarabi-gothic-medium.ttf") as &[u8]).into_font().unwrap()),
         }
@@ -270,6 +274,26 @@ impl App {
     fn save_as(&mut self, filename: String) {
         if self.save(&filename) {
             self.filename = Some(filename);
+        }
+    }
+
+    fn export(&self, filename: String) {
+        let mut engine = Engine::new(self.sample_rate, self.song.clone());
+        let length = ((60.0 / self.song.bpm as f32) * self.sample_rate as f32) as usize * self.song.ptn_len;
+        let mut output = vec![0.0; length];
+        engine.calculate(&mut output[..]);
+
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: self.sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        if let Ok(mut writer) = hound::WavWriter::create(filename, spec) {
+            for sample in output {
+                writer.write_sample((sample * 32768.0) as i32).unwrap();
+            }
+            writer.finalize();
         }
     }
 }
@@ -321,6 +345,20 @@ impl Component for App {
                     }
                 });
                 load.child().place(Text::new("load".to_string(), style.clone()));
+            }
+            {
+                let mut export = controls.child().place(Button::new());
+                export.listen(|myself, ctx, ClickEvent| {
+                    if let Ok(result) = nfd::dialog_save().filter("wav").open() {
+                        match result {
+                            nfd::Response::Okay(path) => {
+                                myself.export(path);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+                export.child().place(Text::new("export".to_string(), style.clone()));
             }
             {
                 let mut play = controls.child().place(Button::new());

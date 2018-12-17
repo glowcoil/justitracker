@@ -80,23 +80,26 @@ impl Engine {
     }
 }
 
-pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
+pub fn start_audio_thread() -> (u32, mpsc::Sender<AudioMessage>) {
     let (send, recv) = mpsc::channel();
+
+    let endpoint = cpal::default_endpoint().expect("no output device available");
+    let mut supported_formats_range = endpoint.supported_formats()
+        .expect("error while querying formats");
+    let format = supported_formats_range.next()
+        .expect("no supported format?!")
+        .with_max_samples_rate();
+
+    let sample_rate = format.samples_rate.0;
 
     thread::spawn(move || {
         let event_loop = EventLoop::new();
-        let endpoint = cpal::default_endpoint().expect("no output device available");
-        let mut supported_formats_range = endpoint.supported_formats()
-            .expect("error while querying formats");
-        let format = supported_formats_range.next()
-            .expect("no supported format?!")
-            .with_max_samples_rate();
         let voice_id = event_loop.build_voice(&endpoint, &format).unwrap();
         event_loop.play(voice_id);
 
         let mut playing = false;
 
-        let mut engine: Engine = Engine::new(format.samples_rate.0, Song::default());
+        let mut engine: Engine = Engine::new(sample_rate, Song::default());
 
         event_loop.run(move |_voice_id, buffer| {
             for msg in recv.try_iter() {
@@ -138,5 +141,5 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
         });
     });
 
-    send
+    (sample_rate, send)
 }
