@@ -3,11 +3,11 @@ use unsafe_any::UnsafeAny;
 use std::any::TypeId;
 use std::marker::PhantomData;
 use std::f32;
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 use std::mem;
+use std::time::Duration;
 
 use slab::Slab;
 use anymap::AnyMap;
@@ -75,6 +75,7 @@ pub struct UI {
 
     components: Slab<ComponentData>,
     listeners: Slab<AnyMap>,
+    animation_listeners: HashMap<Id, Listener<Duration>>,
     layout_root: Id,
 
     under_cursor: HashSet<Id>,
@@ -128,6 +129,26 @@ struct Listener<E> {
     dispatcher: fn(Id, Id, &mut Box<UnsafeAny>, &mut Slab<ComponentData>, &mut InputState, &mut VecDeque<QueueEntry>, E) -> UIEventResponse,
 }
 
+impl<E> Listener<E> {
+    fn new<C, F: Fn(&mut C, &mut EventContext, E) + 'static>(id: Id, callback: F) -> Listener<E> {
+        Listener {
+            id: id,
+            callback: Box::new(callback),
+            dispatcher: |origin, id, callback, components, input_state, queue, event| {
+                let f: &mut F = unsafe { callback.downcast_mut_unchecked() };
+                let mut component = mem::replace(&mut components[id].component, Box::new(Empty));
+                let response = {
+                    let mut context = EventContext { origin, id, components, input_state, queue, response: UIEventResponse::default() };
+                    f(unsafe { component.downcast_mut_unchecked() }, &mut context, event);
+                    context.response
+                };
+                components[id].component = component;
+                response
+            },
+        }
+    }
+}
+
 struct QueueEntry {
     callback: fn(&mut UI, Id, Box<UnsafeAny>),
     id: Id,
@@ -142,6 +163,7 @@ impl UI {
 
             components: Slab::new(),
             listeners: Slab::new(),
+            animation_listeners: HashMap::new(),
             layout_root: 0,
 
             under_cursor: HashSet::new(),
@@ -182,6 +204,7 @@ impl UI {
 
     fn cleanup(&mut self, id: Id) {
         self.listeners[id] = AnyMap::new();
+        self.animation_listeners.remove(&id);
         self.under_cursor.remove(&id);
         if let Some(focus) = self.input_state.focus {
             if focus == id {
@@ -303,6 +326,10 @@ impl UI {
         ui_response
     }
 
+    pub fn is_animating(&self) -> bool {
+        !self.animation_listeners.is_empty()
+    }
+
     fn trace(&self, mouse_position: Point) -> Vec<Id> {
         let mut under_cursor = Vec::new();
         self.trace_inner(mouse_position, self.layout_root, &mut under_cursor);
@@ -377,8 +404,8 @@ impl UI {
 
     /* display */
 
-    pub fn display(&mut self) -> DisplayList {
-        self.update();
+    pub fn display(&mut self, elapsed: Duration) -> DisplayList {
+        self.update(elapsed);
         self.layout();
         let mut list = DisplayList::new();
         self.display_component(self.layout_root, &mut list);
@@ -409,7 +436,10 @@ impl UI {
 
     /* update */
 
-    fn update(&mut self) {
+    fn update(&mut self, elapsed: Duration) {
+        for (_, listener) in self.animation_listeners.iter_mut() {
+            (listener.dispatcher)(listener.id, listener.id, &mut listener.callback, &mut self.components, &mut self.input_state, &mut self.queue, elapsed);
+        }
         self.drain_queue();
         self.update_component(0);
     }
@@ -471,6 +501,10 @@ impl<'a, C: Component> InstallContext<'a, C> {
         LayoutChild { components: &self.ui.components, id: self.ui.components[child.parent].children[child.child] }
             .offset(x, y)
     }
+
+    pub fn animate<F: Fn(&mut C, &mut EventContext, Duration) + 'static>(&mut self, callback: F) {
+        self.ui.animation_listeners.insert(self.id, Listener::new(self.id, callback));
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -528,21 +562,7 @@ impl<'a, C: Component> ComponentRef<'a, C> {
     }
 
     pub fn listen<E: 'static, F: Fn(&mut C, &mut EventContext, E) + 'static>(&mut self, callback: F) -> &mut Self {
-        self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
-            id: self.owner,
-            callback: Box::new(callback),
-            dispatcher: |origin, id, callback, components, input_state, queue, event| {
-                let f: &mut F = unsafe { callback.downcast_mut_unchecked() };
-                let mut component = mem::replace(&mut components[id].component, Box::new(Empty));
-                let response = {
-                    let mut context = EventContext { origin, id, components, input_state, queue, response: UIEventResponse::default() };
-                    f(unsafe { component.downcast_mut_unchecked() }, &mut context, event);
-                    context.response
-                };
-                components[id].component = component;
-                response
-            },
-        });
+        self.ui.listeners[self.id].insert::<Listener<E>>(Listener::new(self.owner, callback));
         self
     }
 }

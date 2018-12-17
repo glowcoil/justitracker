@@ -89,15 +89,17 @@ fn main() {
 
     ui.place(App::new());
 
-    renderer.render(ui.display());
 
     let mut now = Instant::now();
     let mut event = false;
     let mut waiting = false;
     let proxy = events_loop.create_proxy();
+
+    renderer.render(ui.display(now.elapsed()));
+
     thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_millis(33));
+            thread::sleep(Duration::from_millis(16));
             proxy.wakeup();
         }
     });
@@ -110,7 +112,8 @@ fn main() {
                 glutin::WindowEvent::Resized(size) => {
                     ui.resize(size.width as f32, size.height as f32);
                     renderer.resize(size.width as f32, size.height as f32);
-                    renderer.render(ui.display());
+                    renderer.render(ui.display(now.elapsed()));
+                    now = Instant::now();
                     None
                 }
                 glutin::WindowEvent::CursorMoved { position: pos, .. } => {
@@ -173,6 +176,12 @@ fn main() {
             glutin::Event::DeviceEvent { event: glutin::DeviceEvent::MouseMotion { delta }, .. } => {
                 Some(InputEvent::MouseMove(delta.0 as f32, delta.1 as f32))
             },
+            glutin::Event::Awakened => {
+                if ui.is_animating() {
+                    event = true;
+                }
+                None
+            }
             _ => None,
         };
 
@@ -198,8 +207,9 @@ fn main() {
         }
 
         if event {
-            if now.elapsed() >= Duration::from_millis(17) {
-                renderer.render(ui.display());
+            let elapsed = now.elapsed();
+            if elapsed >= Duration::from_millis(16) {
+                renderer.render(ui.display(elapsed));
                 event = false;
                 now = Instant::now();
             }
