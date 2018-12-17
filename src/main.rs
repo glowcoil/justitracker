@@ -81,191 +81,7 @@ fn main() {
 
     let mut ui = UI::new(width as f32, height as f32);
 
-    struct App {
-        song: Song,
-        audio_send: mpsc::Sender<AudioMessage>,
-        cursor: (usize, usize),
-        font: Rc<Font<'static>>,
-    }
-    impl App {
-        fn update(&mut self) {
-            self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
-        }
-
-        fn set_ptn_len(&mut self, len: usize) {
-            if len < self.song.ptn_len {
-                for track in 0..self.song.notes.len() {
-                    self.song.notes[track].truncate(len);
-                }
-            } else if len > self.song.ptn_len {
-                for track in 0..self.song.notes.len() {
-                    self.song.notes[track].resize(len, Note::None);
-                }
-            }
-            self.song.ptn_len = len;
-        }
-
-        fn add_track(&mut self) {
-            self.song.samples.push(vec![0.0; 1]);
-            let mut track = Vec::with_capacity(self.song.ptn_len);
-            track.resize(self.song.ptn_len, Note::None);
-            self.song.notes.push(track);
-        }
-
-        fn delete_track(&mut self, track: usize) {
-            self.song.samples.remove(track);
-            self.song.notes.remove(track);
-        }
-    }
-    impl Component for App {
-        fn install(&self, context: &mut InstallContext<App>, _children: &[Child]) {
-            let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(19.0) };
-
-            let mut root = context.root().place(Col::new(5.0));
-
-            {
-                let mut controls = root.child().place(Row::new(5.0));
-                {
-                    let mut play = controls.child().place(Button::new());
-                    play.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Play).unwrap() });
-                    play.child().place(Text::new("play".to_string(), style.clone()));
-                }
-                {
-                    let mut stop = controls.child().place(Button::new());
-                    stop.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Stop).unwrap() });
-                    stop.child().place(Text::new("stop".to_string(), style.clone()));
-                }
-                controls.child().place(Text::new("bpm:".to_string(), style.clone()));
-                {
-                    let mut bpm = controls.child().place(IntegerInput::new(self.song.bpm as i32, style.clone()));
-                    bpm.listen(|ctx, value: i32| {
-                        ctx.get_mut().song.bpm = value as u32;
-                        ctx.get_mut().update();
-                    });
-                }
-                controls.child().place(Text::new("len:".to_string(), style.clone()));
-                {
-                    let mut ptn_len = controls.child().place(IntegerInput::new(self.song.ptn_len as i32, style.clone()));
-                    ptn_len.listen(|ctx, value: i32| {
-                        let value = value.max(1) as usize;
-                        ctx.get_mut().set_ptn_len(value);
-                        ctx.get_mut().update();
-                    });
-                }
-                {
-                    let mut add = controls.child().place(Button::new());
-                    add.listen(|ctx, ClickEvent| {
-                        ctx.get_mut().add_track();
-                        ctx.get_mut().update();
-                    });
-                    add.child().place(Text::new("add".to_string(), style.clone()));
-                }
-            }
-
-            {
-                let mut scrollbox = root.child().place(Scrollbox::new());
-
-                let mut notes = scrollbox.child().place(Row::new(5.0));
-                for i in 0..self.song.notes.len() {
-                    let mut col = notes.child().place(Col::new(5.0));
-
-                    {
-                        let mut inst = col.child().place(Button::new());
-                        inst.listen(move |ctx, ClickEvent| {
-                            if let Ok(result) = nfd::dialog().filter("wav").open() {
-                                match result {
-                                    nfd::Response::Okay(path) => {
-                                        let wave = hound::WavReader::open(path).unwrap();
-                                        let samples: Vec<f32> = match wave.spec().sample_format {
-                                            hound::SampleFormat::Float => {
-                                                wave.into_samples::<f32>().map(|s| s.unwrap()).collect()
-                                            }
-                                            hound::SampleFormat::Int => {
-                                                wave.into_samples::<i32>().map(|s| s.unwrap() as f32 / 32768.0).collect()
-                                            }
-                                        };
-                                        ctx.get_mut().song.samples[i] = samples;
-                                        ctx.get_mut().update();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        });
-                        inst.child().place(Text::new("inst".to_string(), style.clone()));
-                    }
-
-                    {
-                        let mut del = col.child().place(Button::new());
-                        del.listen(move |ctx, ClickEvent| {
-                            ctx.get_mut().delete_track(i);
-                            ctx.get_mut().update();
-                        });
-                        del.child().place(Text::new("del".to_string(), style.clone()));
-                    }
-
-                    for j in 0..self.song.ptn_len {
-                        let color = if (i,j) == self.cursor {
-                            [0.02, 0.2, 0.6, 1.0]
-                        } else {
-                            [0.0, 0.0, 0.0, 0.0]
-                        };
-                        let mut bg = col.child().place(BackgroundColor::new(color));
-                        let mut note = bg.child().place(NoteElement::new(4, self.song.notes[i][j].clone(), style.clone()));
-                        note.listen(move |ctx, value: Note| {
-                            ctx.get_mut().song.notes[i][j] = value.clone();
-                            ctx.get_mut().update();
-                        });
-                    }
-                }
-            }
-
-            root.listen(|ctx, KeyPress(button)| {
-                match button {
-                    KeyboardButton::Up => { ctx.get_mut().cursor.1 = ctx.get().cursor.1.saturating_sub(1); }
-                    KeyboardButton::Down => { ctx.get_mut().cursor.1 = (ctx.get().cursor.1 + 1).min(ctx.get().song.ptn_len.saturating_sub(1)); }
-                    KeyboardButton::Left => { ctx.get_mut().cursor.0 = ctx.get().cursor.0.saturating_sub(1); }
-                    KeyboardButton::Right => { ctx.get_mut().cursor.0 = (ctx.get().cursor.0 + 1).min(ctx.get().song.notes.len().saturating_sub(1)); }
-                    KeyboardButton::Key1 | KeyboardButton::Key2 | KeyboardButton::Key3 | KeyboardButton::Key4 => {
-                        let cursor = ctx.get().cursor;
-                        match ctx.get().song.notes[cursor.0][cursor.1] {
-                            Note::Off | Note::None => { ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::On(vec![0; 4]); }
-                            _ => {}
-                        }
-
-                        let delta = if ctx.get_input_state().modifiers.shift { -1 } else { 1 };
-                        if let Note::On(ref mut factors) = ctx.get_mut().song.notes[cursor.0].get_mut(cursor.1).unwrap() {
-                            match button {
-                                KeyboardButton::Key1 => { factors[0] += delta; }
-                                KeyboardButton::Key2 => { factors[1] += delta; }
-                                KeyboardButton::Key3 => { factors[2] += delta; }
-                                KeyboardButton::Key4 => { factors[3] += delta }
-                                _ => {}
-                            }
-                        }
-
-                        ctx.get_mut().update();
-                    }
-                    KeyboardButton::Back | KeyboardButton::Delete => {
-                        let cursor = ctx.get().cursor;
-                        ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::None;
-                        ctx.get_mut().update();
-                    }
-                    KeyboardButton::Grave | KeyboardButton::O => {
-                        let cursor = ctx.get().cursor;
-                        ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::Off;
-                        ctx.get_mut().update();
-                    }
-                    _ => {}
-                }
-            });
-        }
-    }
-    ui.place(App {
-         song: Song::default(),
-         audio_send: start_audio_thread(),
-         cursor: (0, 0),
-         font: Rc::new(FontCollection::from_bytes(include_bytes!("../sawarabi-gothic-medium.ttf") as &[u8]).into_font().unwrap()),
-    });
+    ui.place(App::new());
 
     renderer.render(ui.display());
 
@@ -385,6 +201,198 @@ fn main() {
 
         glutin::ControlFlow::Continue
     });
+}
+
+
+struct App {
+    song: Song,
+    audio_send: mpsc::Sender<AudioMessage>,
+    cursor: (usize, usize),
+    font: Rc<Font<'static>>,
+}
+
+impl App {
+    fn new() -> App {
+        App {
+            song: Song::default(),
+            audio_send: start_audio_thread(),
+            cursor: (0, 0),
+            font: Rc::new(FontCollection::from_bytes(include_bytes!("../sawarabi-gothic-medium.ttf") as &[u8]).into_font().unwrap()),
+        }
+    }
+
+    fn update(&mut self) {
+        self.audio_send.send(AudioMessage::Song(self.song.clone())).unwrap();
+    }
+
+    fn set_ptn_len(&mut self, len: usize) {
+        if len < self.song.ptn_len {
+            for track in 0..self.song.notes.len() {
+                self.song.notes[track].truncate(len);
+            }
+        } else if len > self.song.ptn_len {
+            for track in 0..self.song.notes.len() {
+                self.song.notes[track].resize(len, Note::None);
+            }
+        }
+        self.song.ptn_len = len;
+    }
+
+    fn add_track(&mut self) {
+        self.song.samples.push(vec![0.0; 1]);
+        let mut track = Vec::with_capacity(self.song.ptn_len);
+        track.resize(self.song.ptn_len, Note::None);
+        self.song.notes.push(track);
+    }
+
+    fn delete_track(&mut self, track: usize) {
+        self.song.samples.remove(track);
+        self.song.notes.remove(track);
+    }
+}
+
+impl Component for App {
+    fn install(&self, context: &mut InstallContext<App>, _children: &[Child]) {
+        let style = TextStyle { font: self.font.clone(), scale: Scale::uniform(19.0) };
+
+        let mut root = context.root().place(Col::new(5.0));
+
+        {
+            let mut controls = root.child().place(Row::new(5.0));
+            {
+                let mut play = controls.child().place(Button::new());
+                play.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Play).unwrap() });
+                play.child().place(Text::new("play".to_string(), style.clone()));
+            }
+            {
+                let mut stop = controls.child().place(Button::new());
+                stop.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Stop).unwrap() });
+                stop.child().place(Text::new("stop".to_string(), style.clone()));
+            }
+            controls.child().place(Text::new("bpm:".to_string(), style.clone()));
+            {
+                let mut bpm = controls.child().place(IntegerInput::new(self.song.bpm as i32, style.clone()));
+                bpm.listen(|ctx, value: i32| {
+                    ctx.get_mut().song.bpm = value as u32;
+                    ctx.get_mut().update();
+                });
+            }
+            controls.child().place(Text::new("len:".to_string(), style.clone()));
+            {
+                let mut ptn_len = controls.child().place(IntegerInput::new(self.song.ptn_len as i32, style.clone()));
+                ptn_len.listen(|ctx, value: i32| {
+                    let value = value.max(1) as usize;
+                    ctx.get_mut().set_ptn_len(value);
+                    ctx.get_mut().update();
+                });
+            }
+            {
+                let mut add = controls.child().place(Button::new());
+                add.listen(|ctx, ClickEvent| {
+                    ctx.get_mut().add_track();
+                    ctx.get_mut().update();
+                });
+                add.child().place(Text::new("add".to_string(), style.clone()));
+            }
+        }
+
+        {
+            let mut scrollbox = root.child().place(Scrollbox::new());
+
+            let mut notes = scrollbox.child().place(Row::new(5.0));
+            for i in 0..self.song.notes.len() {
+                let mut col = notes.child().place(Col::new(5.0));
+
+                {
+                    let mut inst = col.child().place(Button::new());
+                    inst.listen(move |ctx, ClickEvent| {
+                        if let Ok(result) = nfd::dialog().filter("wav").open() {
+                            match result {
+                                nfd::Response::Okay(path) => {
+                                    let wave = hound::WavReader::open(path).unwrap();
+                                    let samples: Vec<f32> = match wave.spec().sample_format {
+                                        hound::SampleFormat::Float => {
+                                            wave.into_samples::<f32>().map(|s| s.unwrap()).collect()
+                                        }
+                                        hound::SampleFormat::Int => {
+                                            wave.into_samples::<i32>().map(|s| s.unwrap() as f32 / 32768.0).collect()
+                                        }
+                                    };
+                                    ctx.get_mut().song.samples[i] = samples;
+                                    ctx.get_mut().update();
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                    inst.child().place(Text::new("inst".to_string(), style.clone()));
+                }
+
+                {
+                    let mut del = col.child().place(Button::new());
+                    del.listen(move |ctx, ClickEvent| {
+                        ctx.get_mut().delete_track(i);
+                        ctx.get_mut().update();
+                    });
+                    del.child().place(Text::new("del".to_string(), style.clone()));
+                }
+
+                for j in 0..self.song.ptn_len {
+                    let color = if (i,j) == self.cursor {
+                        [0.02, 0.2, 0.6, 1.0]
+                    } else {
+                        [0.0, 0.0, 0.0, 0.0]
+                    };
+                    let mut bg = col.child().place(BackgroundColor::new(color));
+                    let mut note = bg.child().place(NoteElement::new(4, self.song.notes[i][j].clone(), style.clone()));
+                    note.listen(move |ctx, value: Note| {
+                        ctx.get_mut().song.notes[i][j] = value.clone();
+                        ctx.get_mut().update();
+                    });
+                }
+            }
+        }
+
+        root.listen(|ctx, KeyPress(button)| {
+            match button {
+                KeyboardButton::Up => { ctx.get_mut().cursor.1 = ctx.get().cursor.1.saturating_sub(1); }
+                KeyboardButton::Down => { ctx.get_mut().cursor.1 = (ctx.get().cursor.1 + 1).min(ctx.get().song.ptn_len.saturating_sub(1)); }
+                KeyboardButton::Left => { ctx.get_mut().cursor.0 = ctx.get().cursor.0.saturating_sub(1); }
+                KeyboardButton::Right => { ctx.get_mut().cursor.0 = (ctx.get().cursor.0 + 1).min(ctx.get().song.notes.len().saturating_sub(1)); }
+                KeyboardButton::Key1 | KeyboardButton::Key2 | KeyboardButton::Key3 | KeyboardButton::Key4 => {
+                    let cursor = ctx.get().cursor;
+                    match ctx.get().song.notes[cursor.0][cursor.1] {
+                        Note::Off | Note::None => { ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::On(vec![0; 4]); }
+                        _ => {}
+                    }
+
+                    let delta = if ctx.get_input_state().modifiers.shift { -1 } else { 1 };
+                    if let Note::On(ref mut factors) = ctx.get_mut().song.notes[cursor.0].get_mut(cursor.1).unwrap() {
+                        match button {
+                            KeyboardButton::Key1 => { factors[0] += delta; }
+                            KeyboardButton::Key2 => { factors[1] += delta; }
+                            KeyboardButton::Key3 => { factors[2] += delta; }
+                            KeyboardButton::Key4 => { factors[3] += delta }
+                            _ => {}
+                        }
+                    }
+
+                    ctx.get_mut().update();
+                }
+                KeyboardButton::Back | KeyboardButton::Delete => {
+                    let cursor = ctx.get().cursor;
+                    ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::None;
+                    ctx.get_mut().update();
+                }
+                KeyboardButton::Grave | KeyboardButton::O => {
+                    let cursor = ctx.get().cursor;
+                    ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::Off;
+                    ctx.get_mut().update();
+                }
+                _ => {}
+            }
+        });
+    }
 }
 
 
