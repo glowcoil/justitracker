@@ -284,14 +284,14 @@ impl Component for App {
             let mut controls = root.child().place(Row::new(5.0));
             {
                 let mut save = controls.child().place(Button::new());
-                save.listen(|ctx, ClickEvent| {
-                    if ctx.get().filename.is_some() {
-                        ctx.get().save(ctx.get().filename.as_ref().unwrap());
+                save.listen(|myself, ctx, ClickEvent| {
+                    if myself.filename.is_some() {
+                        myself.save(myself.filename.as_ref().unwrap());
                     } else {
                         if let Ok(result) = nfd::dialog_save().filter("ji").open() {
                             match result {
                                 nfd::Response::Okay(path) => {
-                                    ctx.get_mut().save_as(path);
+                                    myself.save_as(path);
                                 }
                                 _ => {}
                             }
@@ -303,16 +303,16 @@ impl Component for App {
             }
             {
                 let mut load = controls.child().place(Button::new());
-                load.listen(|ctx, ClickEvent| {
+                load.listen(|myself, ctx, ClickEvent| {
                     if let Ok(result) = nfd::dialog().filter("ji").open() {
                         match result {
                             nfd::Response::Okay(path) => {
                                 if let Ok(f) = File::open(&path) {
                                     let mut reader = BufReader::new(f);
                                     if let Ok(song) = bincode::deserialize_from(reader) {
-                                        ctx.get_mut().song = song;
-                                        ctx.get_mut().update();
-                                        ctx.get_mut().filename = Some(path);
+                                        myself.song = song;
+                                        myself.update();
+                                        myself.filename = Some(path);
                                     }
                                 }
                             }
@@ -324,36 +324,36 @@ impl Component for App {
             }
             {
                 let mut play = controls.child().place(Button::new());
-                play.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Play).unwrap() });
+                play.listen(|myself, ctx, ClickEvent| { myself.audio_send.send(AudioMessage::Play).unwrap() });
                 play.child().place(Text::new("play".to_string(), style.clone()));
             }
             {
                 let mut stop = controls.child().place(Button::new());
-                stop.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Stop).unwrap() });
+                stop.listen(|myself, ctx, ClickEvent| { myself.audio_send.send(AudioMessage::Stop).unwrap() });
                 stop.child().place(Text::new("stop".to_string(), style.clone()));
             }
             controls.child().place(Text::new("bpm:".to_string(), style.clone()));
             {
                 let mut bpm = controls.child().place(IntegerInput::new(self.song.bpm as i32, style.clone()));
-                bpm.listen(|ctx, value: i32| {
-                    ctx.get_mut().song.bpm = value as u32;
-                    ctx.get_mut().update();
+                bpm.listen(|myself, ctx, value: i32| {
+                    myself.song.bpm = value as u32;
+                    myself.update();
                 });
             }
             controls.child().place(Text::new("len:".to_string(), style.clone()));
             {
                 let mut ptn_len = controls.child().place(IntegerInput::new(self.song.ptn_len as i32, style.clone()));
-                ptn_len.listen(|ctx, value: i32| {
+                ptn_len.listen(|myself, ctx, value: i32| {
                     let value = value.max(1) as usize;
-                    ctx.get_mut().set_ptn_len(value);
-                    ctx.get_mut().update();
+                    myself.set_ptn_len(value);
+                    myself.update();
                 });
             }
             {
                 let mut add = controls.child().place(Button::new());
-                add.listen(|ctx, ClickEvent| {
-                    ctx.get_mut().add_track();
-                    ctx.get_mut().update();
+                add.listen(|myself, ctx, ClickEvent| {
+                    myself.add_track();
+                    myself.update();
                 });
                 add.child().place(Text::new("add".to_string(), style.clone()));
             }
@@ -368,7 +368,7 @@ impl Component for App {
 
                 {
                     let mut inst = col.child().place(Button::new());
-                    inst.listen(move |ctx, ClickEvent| {
+                    inst.listen(move |myself, ctx, ClickEvent| {
                         if let Ok(result) = nfd::dialog().filter("wav").open() {
                             match result {
                                 nfd::Response::Okay(path) => {
@@ -381,8 +381,8 @@ impl Component for App {
                                             wave.into_samples::<i32>().map(|s| s.unwrap() as f32 / 32768.0).collect()
                                         }
                                     };
-                                    ctx.get_mut().song.samples[i] = samples;
-                                    ctx.get_mut().update();
+                                    myself.song.samples[i] = samples;
+                                    myself.update();
                                 }
                                 _ => {}
                             }
@@ -393,9 +393,9 @@ impl Component for App {
 
                 {
                     let mut del = col.child().place(Button::new());
-                    del.listen(move |ctx, ClickEvent| {
-                        ctx.get_mut().delete_track(i);
-                        ctx.get_mut().update();
+                    del.listen(move |myself, ctx, ClickEvent| {
+                        myself.delete_track(i);
+                        myself.update();
                     });
                     del.child().place(Text::new("del".to_string(), style.clone()));
                 }
@@ -408,29 +408,29 @@ impl Component for App {
                     };
                     let mut bg = col.child().place(BackgroundColor::new(color));
                     let mut note = bg.child().place(NoteElement::new(4, self.song.notes[i][j].clone(), style.clone()));
-                    note.listen(move |ctx, value: Note| {
-                        ctx.get_mut().song.notes[i][j] = value.clone();
-                        ctx.get_mut().update();
+                    note.listen(move |myself, ctx, value: Note| {
+                        myself.song.notes[i][j] = value.clone();
+                        myself.update();
                     });
                 }
             }
         }
 
-        root.listen(|ctx, KeyPress(button)| {
+        root.listen(|myself, ctx, KeyPress(button)| {
             match button {
-                KeyboardButton::Up => { ctx.get_mut().cursor.1 = ctx.get().cursor.1.saturating_sub(1); }
-                KeyboardButton::Down => { ctx.get_mut().cursor.1 = (ctx.get().cursor.1 + 1).min(ctx.get().song.ptn_len.saturating_sub(1)); }
-                KeyboardButton::Left => { ctx.get_mut().cursor.0 = ctx.get().cursor.0.saturating_sub(1); }
-                KeyboardButton::Right => { ctx.get_mut().cursor.0 = (ctx.get().cursor.0 + 1).min(ctx.get().song.notes.len().saturating_sub(1)); }
+                KeyboardButton::Up => { myself.cursor.1 = myself.cursor.1.saturating_sub(1); }
+                KeyboardButton::Down => { myself.cursor.1 = (myself.cursor.1 + 1).min(myself.song.ptn_len.saturating_sub(1)); }
+                KeyboardButton::Left => { myself.cursor.0 = myself.cursor.0.saturating_sub(1); }
+                KeyboardButton::Right => { myself.cursor.0 = (myself.cursor.0 + 1).min(myself.song.notes.len().saturating_sub(1)); }
                 KeyboardButton::Key1 | KeyboardButton::Key2 | KeyboardButton::Key3 | KeyboardButton::Key4 => {
-                    let cursor = ctx.get().cursor;
-                    match ctx.get().song.notes[cursor.0][cursor.1] {
-                        Note::Off | Note::None => { ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::On(vec![0; 4]); }
+                    let cursor = myself.cursor;
+                    match myself.song.notes[cursor.0][cursor.1] {
+                        Note::Off | Note::None => { myself.song.notes[cursor.0][cursor.1] = Note::On(vec![0; 4]); }
                         _ => {}
                     }
 
                     let delta = if ctx.get_input_state().modifiers.shift { -1 } else { 1 };
-                    if let Note::On(ref mut factors) = ctx.get_mut().song.notes[cursor.0].get_mut(cursor.1).unwrap() {
+                    if let Note::On(ref mut factors) = myself.song.notes[cursor.0].get_mut(cursor.1).unwrap() {
                         match button {
                             KeyboardButton::Key1 => { factors[0] += delta; }
                             KeyboardButton::Key2 => { factors[1] += delta; }
@@ -440,17 +440,17 @@ impl Component for App {
                         }
                     }
 
-                    ctx.get_mut().update();
+                    myself.update();
                 }
                 KeyboardButton::Back | KeyboardButton::Delete => {
-                    let cursor = ctx.get().cursor;
-                    ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::None;
-                    ctx.get_mut().update();
+                    let cursor = myself.cursor;
+                    myself.song.notes[cursor.0][cursor.1] = Note::None;
+                    myself.update();
                 }
                 KeyboardButton::Grave | KeyboardButton::O => {
-                    let cursor = ctx.get().cursor;
-                    ctx.get_mut().song.notes[cursor.0][cursor.1] = Note::Off;
-                    ctx.get_mut().update();
+                    let cursor = myself.cursor;
+                    myself.song.notes[cursor.0][cursor.1] = Note::Off;
+                    myself.update();
                 }
                 _ => {}
             }
@@ -497,27 +497,26 @@ impl Component for IntegerInput {
 
     fn install(&self, context: &mut InstallContext<IntegerInput>, _children: &[Child]) {
         let mut text = context.root().place(Text::new(self.value.to_string(), self.style.clone()));
-        text.listen(|ctx, MousePress(_)| {
+        text.listen(|myself, ctx, MousePress(_)| {
             ctx.capture_cursor();
 
-            let myself = ctx.get_mut();
             myself.dragging = true;
             myself.old = myself.value;
             myself.delta = 0.0;
         });
-        text.listen(|ctx, MouseMove(dx, dy)| {
-            if ctx.get().dragging {
-                let previous = ctx.get().value;
-                let value = ctx.get_mut().drag((dx, dy));
+        text.listen(|myself, ctx, MouseMove(dx, dy)| {
+            if myself.dragging {
+                let previous = myself.value;
+                let value = myself.drag((dx, dy));
                 if value != previous {
                     ctx.fire(value);
                 }
             }
         });
-        text.listen(|ctx, MouseRelease(_)| {
+        text.listen(|myself, ctx, MouseRelease(_)| {
             ctx.release_cursor();
 
-            ctx.get_mut().dragging = false;
+            myself.dragging = false;
         });
     }
 }
@@ -548,11 +547,11 @@ impl Component for NoteElement {
             Note::On(ref factors) => {
                 for i in 0..factors.len() {
                     let mut factor = row.child().place(IntegerInput::new(factors[i] as i32, self.style.clone()));
-                    factor.listen(move |ctx, value: i32| {
-                        if let Note::On(ref mut factors) = ctx.get_mut().value {
+                    factor.listen(move |myself, ctx, value: i32| {
+                        if let Note::On(ref mut factors) = myself.value {
                             factors[i] = value;
                         }
-                        let value = ctx.get().value.clone();
+                        let value = myself.value.clone();
                         ctx.fire(value);
                     });
                 }

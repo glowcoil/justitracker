@@ -527,15 +527,20 @@ impl<'a, C: Component> ComponentRef<'a, C> {
         Slot { ui: self.ui, owner: self.owner, id, phantom_data: PhantomData }
     }
 
-    pub fn listen<E: 'static, F: Fn(&mut EventContext<C>, E) + 'static>(&mut self, callback: F) -> &mut Self {
+    pub fn listen<E: 'static, F: Fn(&mut C, &mut EventContext, E) + 'static>(&mut self, callback: F) -> &mut Self {
         self.ui.listeners[self.id].insert::<Listener<E>>(Listener {
             id: self.owner,
             callback: Box::new(callback),
             dispatcher: |origin, id, callback, components, input_state, queue, event| {
                 let f: &mut F = unsafe { callback.downcast_mut_unchecked() };
-                let mut context = EventContext { origin, id, components, input_state, queue, response: UIEventResponse::default(), phantom_data: PhantomData };
-                f(&mut context, event);
-                context.response
+                let mut component = mem::replace(&mut components[id].component, Box::new(Empty));
+                let response = {
+                    let mut context = EventContext { origin, id, components, input_state, queue, response: UIEventResponse::default() };
+                    f(unsafe { component.downcast_mut_unchecked() }, &mut context, event);
+                    context.response
+                };
+                components[id].component = component;
+                response
             },
         });
         self
@@ -554,25 +559,16 @@ impl<'a, C: Component> Drop for ComponentRef<'a, C> {
 
 /* events */
 
-pub struct EventContext<'a, C: Component> {
+pub struct EventContext<'a> {
     origin: Id,
     id: Id,
     components: &'a mut Slab<ComponentData>,
     input_state: &'a mut InputState,
     queue: &'a mut VecDeque<QueueEntry>,
     response: UIEventResponse,
-    phantom_data: PhantomData<C>,
 }
 
-impl<'a, C: Component> EventContext<'a, C> {
-    pub fn get(&self) -> &C {
-        unsafe { self.components[self.id].component.downcast_ref_unchecked() }
-    }
-
-    pub fn get_mut(&mut self) -> &mut C {
-        unsafe { self.components[self.id].component.downcast_mut_unchecked() }
-    }
-
+impl<'a> EventContext<'a> {
     pub fn fire<E: 'static>(&mut self, event: E) {
         self.queue.push_back(QueueEntry {
             id: self.id,
@@ -961,21 +957,21 @@ impl Component for Button {
         };
 
         let mut bg = context.root().place(BackgroundColor::new(color));
-        bg.listen(|ctx, MouseEnter| {
-            ctx.get_mut().state = ButtonState::Hover;
+        bg.listen(|myself, ctx, MouseEnter| {
+            myself.state = ButtonState::Hover;
         });
-        bg.listen(|ctx, MouseLeave| {
-            ctx.get_mut().state = ButtonState::Up;
+        bg.listen(|myself, ctx, MouseLeave| {
+            myself.state = ButtonState::Up;
         });
-        bg.listen(|ctx, MousePress(button)| {
+        bg.listen(|myself, ctx, MousePress(button)| {
             if button == MouseButton::Left {
-                ctx.get_mut().state = ButtonState::Down;
+                myself.state = ButtonState::Down;
             }
         });
-        bg.listen(|ctx, MouseRelease(button)| {
+        bg.listen(|myself, ctx, MouseRelease(button)| {
             if button == MouseButton::Left {
-                if ctx.get().state == ButtonState::Down {
-                    ctx.get_mut().state = ButtonState::Hover;
+                if myself.state == ButtonState::Down {
+                    myself.state = ButtonState::Hover;
                     ctx.fire(ClickEvent);
                 }
             }
@@ -1017,9 +1013,9 @@ impl Component for Scrollbox {
         };
 
         let mut inner = context.root().place(ScrollboxInner { position: self.position, height: child_height });
-        inner.listen(move |ctx, MouseScroll(_dx, dy)| {
+        inner.listen(move |myself, ctx, MouseScroll(_dx, dy)| {
             let (_width, height) = ctx.get_size();
-            ctx.get_mut().position = (ctx.get().position - dy).min(child_height - height).max(0.0);
+            myself.position = (myself.position - dy).min(child_height - height).max(0.0);
         });
 
         {
@@ -1034,29 +1030,29 @@ impl Component for Scrollbox {
             };
 
             let mut bar = inner.child().place(BackgroundColor::new(color));
-            bar.listen(|ctx, MouseEnter| {
-                ctx.get_mut().hover = true;
+            bar.listen(|myself, ctx, MouseEnter| {
+                myself.hover = true;
             });
-            bar.listen(|ctx, MouseLeave| {
-                ctx.get_mut().hover = false;
+            bar.listen(|myself, ctx, MouseLeave| {
+                myself.hover = false;
             });
-            bar.listen(|ctx, MousePress(button)| {
+            bar.listen(|myself, ctx, MousePress(button)| {
                 if button == MouseButton::Left {
-                    ctx.get_mut().scrolling = Some((ctx.get().position, 0.0));
+                    myself.scrolling = Some((myself.position, 0.0));
                     ctx.capture_mouse_focus();
                 }
             });
-            bar.listen(move |ctx, MouseMove(dx, dy)| {
+            bar.listen(move |myself, ctx, MouseMove(dx, dy)| {
                 let (_width, height) = ctx.get_size();
-                if let Some((original, delta)) = ctx.get().scrolling {
+                if let Some((original, delta)) = myself.scrolling {
                     let delta = delta + dy;
-                    ctx.get_mut().scrolling = Some((original, delta));
-                    ctx.get_mut().position = (original + delta / height * child_height).min(child_height - height).max(0.0);
+                    myself.scrolling = Some((original, delta));
+                    myself.position = (original + delta / height * child_height).min(child_height - height).max(0.0);
                 }
             });
-            bar.listen(|ctx, MouseRelease(button)| {
+            bar.listen(|myself, ctx, MouseRelease(button)| {
                 if button == MouseButton::Left {
-                    ctx.get_mut().scrolling = None;
+                    myself.scrolling = None;
                     ctx.release_mouse_focus();
                 }
             });
