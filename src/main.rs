@@ -14,6 +14,9 @@ extern crate nfd;
 extern crate anymap;
 extern crate unsafe_any;
 extern crate slab;
+#[macro_use]
+extern crate serde_derive;
+extern crate bincode;
 
 use std::time::{Instant, Duration};
 use std::thread;
@@ -24,6 +27,9 @@ use rusttype::{FontCollection, Font, Scale};
 
 use std::sync::mpsc;
 use std::rc::Rc;
+
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 
 use render::*;
 use ui::*;
@@ -36,7 +42,7 @@ enum Message {
     SetNote { track: usize, note: usize, factor: usize, power: i32 },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Song {
     bpm: u32,
     ptn_len: usize,
@@ -44,7 +50,7 @@ pub struct Song {
     notes: Vec<Vec<Note>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum Note {
     On(Vec<i32>),
     Off,
@@ -205,6 +211,7 @@ fn main() {
 
 
 struct App {
+    filename: Option<String>,
     song: Song,
     audio_send: mpsc::Sender<AudioMessage>,
     cursor: (usize, usize),
@@ -214,6 +221,7 @@ struct App {
 impl App {
     fn new() -> App {
         App {
+            filename: None,
             song: Song::default(),
             audio_send: start_audio_thread(),
             cursor: (0, 0),
@@ -249,6 +257,21 @@ impl App {
         self.song.samples.remove(track);
         self.song.notes.remove(track);
     }
+
+    fn save(&self, filename: &str) -> bool {
+        if let Ok(f) = File::create(&filename) {
+            let mut writer = BufWriter::new(f);
+            bincode::serialize_into(writer, &self.song).is_ok()
+        } else {
+            false
+        }
+    }
+
+    fn save_as(&mut self, filename: String) {
+        if self.save(&filename) {
+            self.filename = Some(filename);
+        }
+    }
 }
 
 impl Component for App {
@@ -259,6 +282,46 @@ impl Component for App {
 
         {
             let mut controls = root.child().place(Row::new(5.0));
+            {
+                let mut save = controls.child().place(Button::new());
+                save.listen(|ctx, ClickEvent| {
+                    if ctx.get().filename.is_some() {
+                        ctx.get().save(ctx.get().filename.as_ref().unwrap());
+                    } else {
+                        if let Ok(result) = nfd::dialog_save().filter("ji").open() {
+                            match result {
+                                nfd::Response::Okay(path) => {
+                                    ctx.get_mut().save_as(path);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                });
+                save.child().place(Text::new("save".to_string(), style.clone()));
+            }
+            {
+                let mut load = controls.child().place(Button::new());
+                load.listen(|ctx, ClickEvent| {
+                    if let Ok(result) = nfd::dialog().filter("ji").open() {
+                        match result {
+                            nfd::Response::Okay(path) => {
+                                if let Ok(f) = File::open(&path) {
+                                    let mut reader = BufReader::new(f);
+                                    if let Ok(song) = bincode::deserialize_from(reader) {
+                                        ctx.get_mut().song = song;
+                                        ctx.get_mut().update();
+                                        ctx.get_mut().filename = Some(path);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+                load.child().place(Text::new("load".to_string(), style.clone()));
+            }
             {
                 let mut play = controls.child().place(Button::new());
                 play.listen(|ctx, ClickEvent| { ctx.get_mut().audio_send.send(AudioMessage::Play).unwrap() });
