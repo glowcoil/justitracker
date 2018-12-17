@@ -14,6 +14,72 @@ pub enum AudioMessage {
     Song(Song),
 }
 
+pub struct Engine {
+    sample_rate: u32,
+    song: Song,
+    t: u32,
+    note: usize,
+}
+
+impl Engine {
+    pub fn new(sample_rate: u32, song: Song) -> Engine {
+        Engine {
+            sample_rate: sample_rate,
+            song: song,
+            t: 0,
+            note: 0,
+        }
+    }
+
+    pub fn song(&mut self, song: Song) {
+        self.song = song;
+        self.note %= self.song.ptn_len;
+    }
+
+    pub fn reset(&mut self) {
+        self.t = 0;
+        self.note = 0;
+    }
+
+    pub fn calculate(&mut self, buffer: &mut [f32]) {
+        let note_length = ((60.0 / self.song.bpm as f32) * self.sample_rate as f32) as u32;
+        for elem in buffer.iter_mut() {
+            self.t += 1;
+            let mut mix: f32 = 0.0;
+            for track in 0..self.song.notes.len() {
+                if self.t == note_length {
+                    self.t = 0;
+                    self.note = (self.note + 1) % self.song.ptn_len;
+                }
+
+                let mut previous = self.note;
+                let mut length = 0;
+                while let Note::None = self.song.notes[track][previous] {
+                    previous = previous.saturating_sub(1);
+                    length += 1;
+                    if previous == 0 { break; }
+                }
+                if let Note::On(ref factors) = self.song.notes[track][previous] {
+                    let pitch = 2.0f32.powi(factors[0]) * (3.0f32 / 2.0f32).powi(factors[1]) * (5.0f32 / 4.0f32).powi(factors[2]) * (7.0f32 / 4.0f32).powi(factors[3]);
+                    let phase: f32 = ((length * note_length + self.t) as f32 * pitch) % self.song.samples[track].len() as f32;
+
+                    let phase_whole = phase as usize;
+                    let phase_frac = phase - phase_whole as f32;
+                    let value = (1.0 - phase_frac) * self.song.samples[track][phase_whole] + phase_frac * self.song.samples[track][(phase_whole + 1) % self.song.samples[track].len()];
+
+                    mix += value;
+                }
+            }
+            if mix > 1.0 {
+                mix = 1.0;
+            } else if mix < -1.0 {
+                mix = -1.0;
+            }
+            *elem = mix;
+        }
+    }
+}
+
 pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
     let (send, recv) = mpsc::channel();
 
@@ -30,10 +96,7 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
 
         let mut playing = false;
 
-        let mut t: u32 = 0;
-        let mut note: usize = 0;
-
-        let mut song: Song = Song::default();
+        let mut engine: Engine = Engine::new(format.samples_rate.0, Song::default());
 
         event_loop.run(move |_voice_id, buffer| {
             for msg in recv.try_iter() {
@@ -43,12 +106,10 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                     }
                     AudioMessage::Stop => {
                         playing = false;
-                        t = 0;
-                        note = 0;
+                        engine.reset();
                     }
-                    AudioMessage::Song(s) => {
-                        song = s;
-                        note %= song.ptn_len;
+                    AudioMessage::Song(song) => {
+                        engine.song(song);
                     }
                 }
             }
@@ -65,42 +126,10 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
                     }
                 },
                 UnknownTypeBuffer::F32(mut buffer) => {
-                    let note_length = ((60.0 / song.bpm as f32) * format.samples_rate.0 as f32) as u32;
-                    for elem in buffer.iter_mut() {
-                        if playing {
-                            t += 1;
-                            let mut mix: f32 = 0.0;
-                            for track in 0..song.notes.len() {
-                                if t == note_length {
-                                    t = 0;
-                                    note = (note + 1) % song.ptn_len;
-                                }
-
-                                let mut previous = note;
-                                let mut length = 0;
-                                while let Note::None = song.notes[track][previous] {
-                                    previous = previous.saturating_sub(1);
-                                    length += 1;
-                                    if previous == 0 { break; }
-                                }
-                                if let Note::On(ref factors) = song.notes[track][previous] {
-                                    let pitch = 2.0f32.powi(factors[0]) * (3.0f32 / 2.0f32).powi(factors[1]) * (5.0f32 / 4.0f32).powi(factors[2]) * (7.0f32 / 4.0f32).powi(factors[3]);
-                                    let phase: f32 = ((length * note_length + t) as f32 * pitch) % song.samples[track].len() as f32;
-
-                                    let phase_whole = phase as usize;
-                                    let phase_frac = phase - phase_whole as f32;
-                                    let value = (1.0 - phase_frac) * song.samples[track][phase_whole] + phase_frac * song.samples[track][(phase_whole + 1) % song.samples[track].len()];
-
-                                    mix += value;
-                                }
-                            }
-                            if mix > 1.0 {
-                                mix = 1.0;
-                            } else if mix < -1.0 {
-                                mix = -1.0;
-                            }
-                            *elem = mix;
-                        } else {
+                    if playing {
+                        engine.calculate(&mut *buffer);
+                    } else {
+                        for elem in buffer.iter_mut() {
                             *elem = 0.0;
                         }
                     }
