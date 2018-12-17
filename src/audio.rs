@@ -33,11 +33,6 @@ pub fn start_audio_thread() -> mpsc::Sender<AudioMessage> {
         let mut t: u32 = 0;
         let mut note: usize = 0;
 
-        let mut sin: [f32; 128] = [0.0; 128];
-        for (i, x) in sin.iter_mut().enumerate() {
-            *x = (i as f32 * 2.0 * consts::PI / 128.0).sin();
-        }
-
         let mut song: Song = Song::default();
 
         event_loop.run(move |_voice_id, buffer| {
