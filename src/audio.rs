@@ -4,7 +4,7 @@ use std::f32;
 use std::f32::consts;
 
 use cpal;
-use cpal::{EventLoop, UnknownTypeBuffer};
+use cpal::{EventLoop, StreamData, UnknownTypeOutputBuffer};
 
 use {Song, Note};
 
@@ -83,19 +83,20 @@ impl Engine {
 pub fn start_audio_thread() -> (u32, mpsc::Sender<AudioMessage>) {
     let (send, recv) = mpsc::channel();
 
-    let endpoint = cpal::default_endpoint().expect("no output device available");
-    let mut supported_formats_range = endpoint.supported_formats()
+    let event_loop = EventLoop::new();
+
+    let device = cpal::default_output_device().expect("no output device available");
+    let mut supported_formats_range = device.supported_output_formats()
         .expect("error while querying formats");
     let format = supported_formats_range.next()
         .expect("no supported format?!")
-        .with_max_samples_rate();
+        .with_max_sample_rate();
 
-    let sample_rate = format.samples_rate.0;
+    let sample_rate = format.sample_rate.0;
 
     thread::spawn(move || {
-        let event_loop = EventLoop::new();
-        let voice_id = event_loop.build_voice(&endpoint, &format).unwrap();
-        event_loop.play(voice_id);
+        let voice_id = event_loop.build_output_stream(&device, &format).unwrap();
+        event_loop.play_stream(voice_id);
 
         let mut playing = false;
 
@@ -118,17 +119,17 @@ pub fn start_audio_thread() -> (u32, mpsc::Sender<AudioMessage>) {
             }
 
             match buffer {
-                UnknownTypeBuffer::U16(mut buffer) => {
+                StreamData::Output { buffer: UnknownTypeOutputBuffer::U16(mut buffer) } => {
                     for elem in buffer.iter_mut() {
                         *elem = u16::max_value() / 2;
                     }
-                },
-                UnknownTypeBuffer::I16(mut buffer) => {
+                }
+                StreamData::Output { buffer: UnknownTypeOutputBuffer::I16(mut buffer) } => {
                     for elem in buffer.iter_mut() {
                         *elem = 0;
                     }
-                },
-                UnknownTypeBuffer::F32(mut buffer) => {
+                }
+                StreamData::Output { buffer: UnknownTypeOutputBuffer::F32(mut buffer) } => {
                     if playing {
                         engine.calculate(&mut *buffer);
                     } else {
@@ -136,7 +137,8 @@ pub fn start_audio_thread() -> (u32, mpsc::Sender<AudioMessage>) {
                             *elem = 0.0;
                         }
                     }
-                },
+                }
+                _ => {},
             }
         });
     });

@@ -5,7 +5,7 @@ authors = ["Micah Johnston <micah@glowcoil.com>"]
 
 [dependencies]
 glium = "0.22.0"
-cpal = "0.6.0"
+cpal = "0.8.2"
 crossbeam-channel = "*"
 rusttype = "0.2.1"
 unicode-normalization = "0.1"
