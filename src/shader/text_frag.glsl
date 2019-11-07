@@ -5,5 +5,5 @@ in vec4 v_colour;
 out vec4 f_colour;
 
 void main() {
-    f_colour = v_colour * texture(tex, v_tex_coords).rrrr;
+    f_colour = vec4(1, 1, 1, texture(tex, v_tex_coords).r);
 }
