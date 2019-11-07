@@ -90,133 +90,122 @@ fn main() {
     ui.place(App::new());
 
 
-    let mut now = Instant::now();
-    let mut event = false;
-    let mut waiting = false;
-    let proxy = events_loop.create_proxy();
+    const FRAME: std::time::Duration = std::time::Duration::from_micros(1_000_000 / 60);
+    let mut running = true;
+    let mut render = true;
+    while running {
+        let now = Instant::now();
 
-    renderer.render(ui.display(now.elapsed()));
-
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_millis(16));
-            proxy.wakeup();
+        if render || ui.is_animating() {
+            renderer.render(ui.display(FRAME));
+            render = false;
         }
-    });
-    events_loop.run_forever(|ev| {
-        let input_event = match ev {
-            glutin::Event::WindowEvent { event, .. } => match event {
-                glutin::WindowEvent::CloseRequested => {
-                    return glutin::ControlFlow::Break;
-                }
-                glutin::WindowEvent::Resized(size) => {
-                    ui.resize(size.width as f32, size.height as f32);
-                    renderer.resize(size.width as f32, size.height as f32);
-                    renderer.render(ui.display(now.elapsed()));
-                    now = Instant::now();
-                    None
-                }
-                glutin::WindowEvent::CursorMoved { position: pos, .. } => {
-                    Some(InputEvent::CursorMove(pos.x as f32, pos.y as f32))
-                }
-                glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
-                    ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
 
-                    let button = match button {
-                        glutin::MouseButton::Left => Some(MouseButton::Left),
-                        glutin::MouseButton::Middle => Some(MouseButton::Middle),
-                        glutin::MouseButton::Right => Some(MouseButton::Right),
-                        _ => None,
-                    };
-
-                    if let Some(button) = button {
-                        match state {
-                            glutin::ElementState::Pressed => {
-                                Some(InputEvent::MousePress(button))
-                            }
-                            glutin::ElementState::Released => {
-                                Some(InputEvent::MouseRelease(button))
-                            }
-                        }
-                    } else {
+        events_loop.poll_events(|ev| {
+            let input_event = match ev {
+                glutin::Event::WindowEvent { event, .. } => match event {
+                    glutin::WindowEvent::CloseRequested => {
+                        running = false;
+                        return;
+                    }
+                    glutin::WindowEvent::Resized(size) => {
+                        use glium::glutin::GlContext;
+                        renderer.get_display().gl_window().resize(size.to_physical(dpi_factor));
+                        ui.resize(size.width as f32, size.height as f32);
+                        renderer.resize(size.width as f32, size.height as f32);
+                        renderer.render(ui.display(Duration::new(0, 0)));
                         None
                     }
-                }
-                glutin::WindowEvent::MouseWheel { delta, modifiers, .. } => {
-                    ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
-
-                    match delta {
-                        glutin::MouseScrollDelta::LineDelta(x, y) => { Some(InputEvent::MouseScroll(x * 48.0, y * 48.0)) }
-                        glutin::MouseScrollDelta::PixelDelta(glutin::dpi::LogicalPosition { x, y }) => { Some(InputEvent::MouseScroll(x as f32, y as f32)) }
+                    glutin::WindowEvent::CursorMoved { position: pos, .. } => {
+                        Some(InputEvent::CursorMove(pos.x as f32, pos.y as f32))
                     }
-                }
-                glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
-                    ui.modifiers(KeyboardModifiers::from_glutin(input.modifiers));
+                    glutin::WindowEvent::MouseInput { device_id: _, state, button, modifiers } => {
+                        ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
 
-                    if let Some(keycode) = input.virtual_keycode {
-                        let button = KeyboardButton::from_glutin(keycode);
+                        let button = match button {
+                            glutin::MouseButton::Left => Some(MouseButton::Left),
+                            glutin::MouseButton::Middle => Some(MouseButton::Middle),
+                            glutin::MouseButton::Right => Some(MouseButton::Right),
+                            _ => None,
+                        };
 
-                        match input.state {
-                            glutin::ElementState::Pressed => {
-                                Some(InputEvent::KeyPress(button))
+                        if let Some(button) = button {
+                            match state {
+                                glutin::ElementState::Pressed => {
+                                    Some(InputEvent::MousePress(button))
+                                }
+                                glutin::ElementState::Released => {
+                                    Some(InputEvent::MouseRelease(button))
+                                }
                             }
-                            glutin::ElementState::Released => {
-                                Some(InputEvent::KeyRelease(button))
-                            }
+                        } else {
+                            None
                         }
-                    } else {
-                        None
                     }
-                }
-                glutin::WindowEvent::ReceivedCharacter(c) => {
-                    Some(InputEvent::TextInput(c))
-                }
+                    glutin::WindowEvent::MouseWheel { delta, modifiers, .. } => {
+                        ui.modifiers(KeyboardModifiers::from_glutin(modifiers));
+
+                        match delta {
+                            glutin::MouseScrollDelta::LineDelta(x, y) => { Some(InputEvent::MouseScroll(x * 48.0, y * 48.0)) }
+                            glutin::MouseScrollDelta::PixelDelta(glutin::dpi::LogicalPosition { x, y }) => { Some(InputEvent::MouseScroll(x as f32, y as f32)) }
+                        }
+                    }
+                    glutin::WindowEvent::KeyboardInput { device_id: _, input } => {
+                        ui.modifiers(KeyboardModifiers::from_glutin(input.modifiers));
+
+                        if let Some(keycode) = input.virtual_keycode {
+                            let button = KeyboardButton::from_glutin(keycode);
+
+                            match input.state {
+                                glutin::ElementState::Pressed => {
+                                    Some(InputEvent::KeyPress(button))
+                                }
+                                glutin::ElementState::Released => {
+                                    Some(InputEvent::KeyRelease(button))
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    glutin::WindowEvent::ReceivedCharacter(c) => {
+                        Some(InputEvent::TextInput(c))
+                    }
+                    _ => None,
+                },
+                glutin::Event::DeviceEvent { event: glutin::DeviceEvent::MouseMotion { delta }, .. } => {
+                    Some(InputEvent::MouseMove(delta.0 as f32, delta.1 as f32))
+                },
                 _ => None,
-            },
-            glutin::Event::DeviceEvent { event: glutin::DeviceEvent::MouseMotion { delta }, .. } => {
-                Some(InputEvent::MouseMove(delta.0 as f32, delta.1 as f32))
-            },
-            glutin::Event::Awakened => {
-                if ui.is_animating() {
-                    event = true;
+            };
+
+            if let Some(input_event) = input_event {
+                render = true;
+
+                let response = ui.input(input_event);
+
+                renderer.get_display().gl_window().grab_cursor(response.capture_cursor).expect("unable to capture cursor");
+
+                if let Some(mouse_position) = response.mouse_position {
+                    renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64))
+                        .expect("unable to set cursor position");
                 }
-                None
+
+                if let Some(mouse_cursor) = response.mouse_cursor {
+                    renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
+                }
+
+                if let Some(hidden) = response.hide_cursor {
+                    renderer.get_display().gl_window().hide_cursor(hidden);
+                }
             }
-            _ => None,
-        };
+        });
 
-        if let Some(input_event) = input_event {
-            event = true;
-
-            let response = ui.input(input_event);
-
-            renderer.get_display().gl_window().grab_cursor(response.capture_cursor).expect("unable to capture cursor");
-
-            if let Some(mouse_position) = response.mouse_position {
-                renderer.get_display().gl_window().set_cursor_position(glutin::dpi::LogicalPosition::new(mouse_position.0 as f64, mouse_position.1 as f64))
-                    .expect("unable to set cursor position");
-            }
-
-            if let Some(mouse_cursor) = response.mouse_cursor {
-                renderer.get_display().gl_window().set_cursor(MouseCursor::to_glutin(mouse_cursor));
-            }
-
-            if let Some(hidden) = response.hide_cursor {
-                renderer.get_display().gl_window().hide_cursor(hidden);
-            }
+        let elapsed = now.elapsed();
+        if elapsed < FRAME {
+            std::thread::sleep(FRAME - elapsed);
         }
-
-        if event {
-            let elapsed = now.elapsed();
-            if elapsed >= Duration::from_millis(16) {
-                renderer.render(ui.display(elapsed));
-                event = false;
-                now = Instant::now();
-            }
-        }
-
-        glutin::ControlFlow::Continue
-    });
+    }
 }
 
 
