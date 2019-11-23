@@ -4,18 +4,3 @@ version = "0.1.0"
 authors = ["Micah Johnston <micah@glowcoil.com>"]
 
 [dependencies]
-glium = "*"
-cpal = "0.8.2"
-crossbeam-channel = "*"
-rusttype = "0.2.1"
-unicode-normalization = "0.1"
-arrayvec = "0.4"
-hound = "3.3.1"
-libc = "*"
-nfd = "0.0.4"
-anymap = "0.12.1"
-unsafe-any = "0.4.2"
-slab = "0.4.1"
-serde = "1.0.82"
-serde_derive = "1.0.82"
-bincode = "1.0.1"
