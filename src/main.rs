@@ -1,3 +1,4 @@
+extern crate gl;
 extern crate glfw;
 extern crate portaudio;
 
@@ -10,6 +11,14 @@ fn main() {
 
     window.set_key_polling(true);
     window.make_current();
+
+    gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
+
+    unsafe {
+        gl::ClearColor(1.0, 0.0, 0.8, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT);
+    }
+    window.swap_buffers();
 
     audio().unwrap();
 
