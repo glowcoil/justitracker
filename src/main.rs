@@ -1,4 +1,5 @@
 extern crate glfw;
+extern crate portaudio;
 
 use glfw::{Action, Context, Key};
 
@@ -9,6 +10,8 @@ fn main() {
 
     window.set_key_polling(true);
     window.make_current();
+
+    audio().unwrap();
 
     while !window.should_close() {
         glfw.poll_events();
@@ -21,4 +24,29 @@ fn main() {
             }
         }
     }
+}
+
+use portaudio as pa;
+
+const SAMPLE_RATE: f64 = 44_100.0;
+const FRAMES: u32 = 256;
+const CHANNELS: i32 = 2;
+
+fn audio() -> Result<(), pa::Error> {
+    let pa = pa::PortAudio::new()?;
+    let settings = pa.default_output_stream_settings(CHANNELS, SAMPLE_RATE, FRAMES)?;
+    let mut stream = pa.open_non_blocking_stream(settings, move |args| {
+        assert!(args.frames == FRAMES as usize);
+
+        for sample in args.buffer.iter_mut() {
+            *sample = 0.0;
+        }
+
+        pa::Continue
+    })?;
+
+    stream.start()?;
+    stream.stop()?;
+
+    Ok(())
 }

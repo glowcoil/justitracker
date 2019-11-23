@@ -5,3 +5,4 @@ authors = ["Micah Johnston <micah@glowcoil.com>"]
 
 [dependencies]
 glfw = "0.34.0"
+portaudio = "0.7.0"
