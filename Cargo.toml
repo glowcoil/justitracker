@@ -7,4 +7,6 @@ authors = ["Micah Johnston <micah@glowcoil.com>"]
 gl = "0.11.0"
 glfw = "0.34.0"
 gouache = { git = "https://github.com/glowcoil/gouache" }
+hound = "3.4.0"
+nfd = "0.0.4"
 portaudio = "0.7.0"

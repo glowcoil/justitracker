@@ -7,6 +7,7 @@ use window::Window;
 extern crate gl;
 extern crate glfw;
 extern crate gouache;
+extern crate nfd;
 extern crate portaudio;
 
 use glfw::{Action, Key, WindowEvent};
@@ -137,6 +138,20 @@ fn main() {
                             }
                             Key::Backspace | Key::Delete => {
                                 editor.song.notes[editor.cursor.0 * editor.song.length + editor.cursor.1] = Note::None;
+                            }
+                            Key::I => {
+                                if let Ok(nfd::Response::Okay(path)) = nfd::open_file_dialog(Some("wav"), None) {
+                                    if let Ok(mut reader) = hound::WavReader::open(path) {
+                                        editor.song.samples[editor.cursor.0] = match reader.spec().sample_format {
+                                            hound::SampleFormat::Float => {
+                                                reader.samples::<f32>().map(|s| s.unwrap() as f32).collect()
+                                            }
+                                            hound::SampleFormat::Int => {
+                                                reader.samples::<i32>().map(|s| s.unwrap() as f32 / 32768.0).collect()
+                                            }
+                                        };
+                                    }
+                                }
                             }
                             _ => {}
                         }
