@@ -1,8 +1,11 @@
 use glfw::Context;
 
+const FRAME: std::time::Duration = std::time::Duration::from_micros(1_000_000 / 60);
+
 pub struct Window {
     glfw: glfw::Glfw,
     window: glfw::Window,
+    last_frame: std::time::Instant,
 }
 
 impl Window {
@@ -18,7 +21,7 @@ impl Window {
 
         gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
-        Window { glfw, window }
+        Window { glfw, window, last_frame: std::time::Instant::now() }
     }
 
     pub fn poll(&mut self, mut f: impl FnMut(glfw::WindowEvent))  {
@@ -30,5 +33,15 @@ impl Window {
 
     pub fn swap(&mut self) {
         self.window.swap_buffers();
+
+        let elapsed = self.last_frame.elapsed();
+        if elapsed < FRAME {
+            std::thread::sleep(FRAME - elapsed);
+        }
+        self.last_frame = std::time::Instant::now();
+    }
+
+    pub fn should_close(&self) -> bool {
+        self.window.should_close()
     }
 }
