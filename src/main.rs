@@ -69,7 +69,7 @@ fn main() {
     let cell_spacing = 2.0;
 
     let mut running = true;
-    while running {
+    while running && !window.should_close() {
         let mut frame = Frame::new(&mut cache, &mut renderer, 800.0, 600.0);
         frame.clear(Color::rgba(0.1, 0.15, 0.2, 1.0));
 
