@@ -1,7 +1,7 @@
 mod audio;
 mod window;
 
-use audio::Audio;
+use audio::{Audio, Msg};
 use window::Window;
 
 extern crate gl;
@@ -13,15 +13,16 @@ extern crate portaudio;
 use glfw::{Action, Key, WindowEvent};
 use gouache::{renderers::GlRenderer, Cache, Color, Font, Frame, Mat2x2, Vec2};
 
-struct Song {
+#[derive(Clone)]
+pub struct Song {
     tracks: usize,
     length: usize,
     samples: Vec<Vec<f32>>,
     notes: Vec<Note>,
 }
 
-#[derive(Copy, Clone)]
-enum Note {
+#[derive(Copy, Clone, Debug)]
+pub enum Note {
     On([i32; 4]),
     Off,
     None,
@@ -32,7 +33,7 @@ impl Default for Song {
         Song {
             tracks: 8,
             length: 8,
-            samples: vec![Vec::new(); 8],
+            samples: vec![vec![0.0; 1]; 8],
             notes: vec![Note::None; 8 * 8],
         }
     }
@@ -41,13 +42,15 @@ impl Default for Song {
 struct Editor {
     song: Song,
     cursor: (usize, usize),
+    playing: bool,
 }
 
 impl Default for Editor {
     fn default() -> Editor {
         Editor {
             song: Song::default(),
-            cursor: (0, 0)
+            cursor: (0, 0),
+            playing: false,
         }
     }
 }
@@ -132,12 +135,15 @@ fn main() {
                                     _ => {}
                                 };
                                 *note = Note::On(value);
+                                audio.send(Msg::Song(editor.song.clone()));
                             }
                             Key::GraveAccent => {
                                 editor.song.notes[editor.cursor.0 * editor.song.length + editor.cursor.1] = Note::Off;
+                                audio.send(Msg::Song(editor.song.clone()));
                             }
                             Key::Backspace | Key::Delete => {
                                 editor.song.notes[editor.cursor.0 * editor.song.length + editor.cursor.1] = Note::None;
+                                audio.send(Msg::Song(editor.song.clone()));
                             }
                             Key::I => {
                                 if let Ok(nfd::Response::Okay(path)) = nfd::open_file_dialog(Some("wav"), None) {
@@ -150,7 +156,17 @@ fn main() {
                                                 reader.samples::<i32>().map(|s| s.unwrap() as f32 / 32768.0).collect()
                                             }
                                         };
+                                        audio.send(Msg::Song(editor.song.clone()));
                                     }
+                                }
+                            }
+                            Key::Space => {
+                                if editor.playing {
+                                    editor.playing = false;
+                                    audio.send(Msg::Stop);
+                                } else {
+                                    editor.playing = true;
+                                    audio.send(Msg::Play);
                                 }
                             }
                             _ => {}
