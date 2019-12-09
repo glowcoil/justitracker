@@ -17,6 +17,8 @@ impl Window {
         let (mut window, _) = glfw.create_window(800, 600, "justitracker", glfw::WindowMode::Windowed).unwrap();
 
         window.set_key_polling(true);
+        window.set_cursor_pos_polling(true);
+        window.set_mouse_button_polling(true);
         window.make_current();
 
         gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
