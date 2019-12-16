@@ -10,3 +10,4 @@ gouache = { git = "https://github.com/glowcoil/gouache" }
 hound = "3.4.0"
 nfd = "0.0.4"
 portaudio = "0.7.0"
+sendai = { git = "https://github.com/glowcoil/sendai" }
