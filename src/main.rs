@@ -1,7 +1,9 @@
 mod audio;
+mod ui;
 mod window;
 
 use audio::{Audio, Msg};
+use ui::*;
 use window::Window;
 
 extern crate gl;
@@ -13,6 +15,8 @@ extern crate portaudio;
 use glfw::{Action, Key, WindowEvent};
 use gouache::*;
 use gouache::renderers::GlRenderer;
+
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct Song {
@@ -56,35 +60,13 @@ impl Default for Editor {
     }
 }
 
-struct Context {
-    cursor: Vec2,
-    modifiers: glfw::Modifiers,
-    mouse_captured: bool,
-}
-
-struct Rect {
-    pos: Vec2,
-    size: Vec2,
-}
-
-impl Rect {
-    fn new(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect { pos: Vec2::new(x, y), size: Vec2::new(width, height) }
-    }
-
-    fn contains(&self, point: Vec2) -> bool {
-        point.x >= self.pos.x && point.x < self.pos.x + self.size.x &&
-        point.y >= self.pos.y && point.y < self.pos.y + self.size.y
-    }
-}
-
 fn main() {
     let mut window = Window::new(800, 600, "justitracker");
 
     let mut cache = Cache::new();
     let mut renderer = GlRenderer::new();
 
-    let font = Font::from_bytes(include_bytes!("../res/SourceSansPro-Regular.ttf")).unwrap();
+    let font = Rc::new(Font::from_bytes(include_bytes!("../res/SourceSansPro-Regular.ttf")).unwrap());
 
     let mut audio = Audio::start().unwrap();
 
@@ -95,11 +77,12 @@ fn main() {
         .line_to(4.0, 13.0)
         .line_to(12.0, 8.0)
         .build();
-    let mut play = Button {
-        rect: Rect::new(0.0, 0.0, 16.0, 16.0),
-        icon: play_icon,
-        down: false,
-    };
+    let mut play = Button::new(play_icon);
+    play.place(Rect::new(0.0, 0.0, 16.0, 16.0));
+
+    let mut textbox = Textbox::new(font.clone());
+    textbox.place(Rect::new(20.0, 0.0, 128.0, 16.0));
+    *textbox.text_mut() = String::from("text");
 
     let (cell_w, cell_h) = font.measure("00", 14.0);
     let (cell_w, cell_h) = (cell_w.ceil(), cell_h.ceil());
@@ -118,7 +101,8 @@ fn main() {
 
         let toolbar_height = 24.0;
 
-        play.render(&mut frame, &context);
+        play.draw(&mut frame, &context);
+        textbox.draw(&mut frame, &context);
 
         let offset = Vec2::new(0.0, toolbar_height);
         for t in 0..editor.song.tracks {
@@ -222,56 +206,16 @@ fn main() {
                     context.cursor = Vec2::new(x as f32, y as f32);
                 }
                 WindowEvent::MouseButton(..) => {
-                    if play.handle(event, &mut context) {
+                    if play.event(event, &mut context) {
                         editor.playing = true;
                         audio.send(Msg::Play);
                     }
                 }
+                WindowEvent::Char(..) => {
+                    textbox.event(event, &mut context);
+                }
                 _ => {}
             }
         });
-    }
-}
-
-struct Button {
-    rect: Rect,
-    icon: Path,
-    down: bool,
-}
-
-impl Button {
-    fn render(&self, frame: &mut Frame, context: &Context) {
-        let color = if self.down {
-            Color::rgba(0.141, 0.44, 0.77, 1.0)
-        } else if self.rect.contains(context.cursor) {
-            Color::rgba(0.54, 0.63, 0.71, 1.0)
-        } else {
-            Color::rgba(0.38, 0.42, 0.48, 1.0)
-        };
-
-        frame.draw_rect(self.rect.pos, self.rect.size, Mat2x2::id(), color);
-        frame.draw_path(&self.icon, self.rect.pos, Mat2x2::id(), Color::rgba(1.0, 1.0, 1.0, 1.0));
-    }
-
-    fn handle(&mut self, input: glfw::WindowEvent, context: &mut Context) -> bool {
-        match input {
-            WindowEvent::MouseButton(glfw::MouseButton::Button1, glfw::Action::Press, _) => {
-                if !context.mouse_captured && self.rect.contains(context.cursor) {
-                    self.down = true;
-                    context.mouse_captured = true;
-                }
-            }
-            WindowEvent::MouseButton(glfw::MouseButton::Button1, glfw::Action::Release, _) => {
-                if self.down {
-                    context.mouse_captured = false;
-                    self.down = false;
-                    if self.rect.contains(context.cursor) {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
-        }
-        false
     }
 }
