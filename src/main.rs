@@ -10,7 +10,6 @@ extern crate portaudio;
 extern crate sendai;
 
 use gouache::*;
-use gouache::renderers::GlRenderer;
 use sendai::*;
 
 use std::rc::Rc;
@@ -143,10 +142,10 @@ impl Component for Editor {
                     Key::Up => { self.cursor.1 = self.cursor.1.saturating_sub(1) }
                     Key::Down => { self.cursor.1 = (self.cursor.1 + 1).min(self.song.length - 1) }
                     Key::Key1 | Key::Key2 | Key::Key3 | Key::Key4 => {
-                        let mut note = &mut self.song.notes[self.cursor.0 * self.song.length + self.cursor.1];
+                        let note = &mut self.song.notes[self.cursor.0 * self.song.length + self.cursor.1];
                         let mut value = if let Note::On(value) = note { *value } else { [0; 4] };
                         let inc = if context.modifiers.shift { -1 } else { 1 };
-                        let idx = match key {
+                        match key {
                             Key::Key1 => { value[0] += inc }
                             Key::Key2 => { value[1] += inc }
                             Key::Key3 => { value[2] += inc }
